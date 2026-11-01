@@ -1,0 +1,36 @@
+# Visual Studio build artifacts & caches
+.vs/
+build/
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.tlog
+*.lastbuildstate
+*.log
+*.user
+*.suo
+
+# Mod runtime dumps & output
+mods/memory_dumps/
+mods/textures_dump/
+mods/textures/
+*.dmp
+
+# Python bytecode & virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+
+# Temporary OS files
+Thumbs.db
+desktop.ini
+.DS_Store
