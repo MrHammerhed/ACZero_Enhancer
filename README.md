@@ -135,7 +135,7 @@ If you want to contribute HD textures, report replacement bugs, or help with C++
 * **GitHub Discussions**: Open a topic in the [Discussions](../../discussions) tab to showcase work-in-progress textures, share ideas, or discuss implementation details.
 * **GitHub Issues**: Report crashes or bugs via [Issues](../../issues).
 * **Pull Requests**: Directly submit converted textures, script improvements, or documentation updates.
-* **Commentы**: Leave a comment about this on Moddb/NexusMods page and your preferred method of communication (sience comment section is not compfortable).
+* **Comments**: Leave a comment about this on Moddb/NexusMods page and your preferred method of communication (sience comment section is not compfortable).
 
 ---
 
