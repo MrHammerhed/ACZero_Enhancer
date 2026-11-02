@@ -49,7 +49,7 @@ echo [*] Setting up Zero-Install Portable Python in TEMP...
 set "PORTABLE_DIR=%TEMP%\ACZero_PyPortable"
 if not exist "%PORTABLE_DIR%" mkdir "%PORTABLE_DIR%"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $z = Join-Path $env:TEMP 'py_embed.zip'; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $z -UseBasicParsing; Expand-Archive -Path $z -DestinationPath $env:PORTABLE_DIR -Force; Remove-Item $z -Force -ErrorAction SilentlyContinue; $pth = Join-Path $env:PORTABLE_DIR 'python311._pth'; if (Test-Path $pth) { Add-Content -Path $pth -Value ('site-packages' + [char]13 + [char]10 + 'import site') }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; if (-not (Test-Path (Join-Path $env:PORTABLE_DIR 'python.exe'))) { Write-Host '[*] Downloading Portable Python 3.11...'; $z = Join-Path $env:TEMP 'py_embed.zip'; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $z -UseBasicParsing; Expand-Archive -Path $z -DestinationPath $env:PORTABLE_DIR -Force; Remove-Item $z -Force -ErrorAction SilentlyContinue; $pth = Join-Path $env:PORTABLE_DIR 'python311._pth'; if (Test-Path $pth) { Add-Content -Path $pth -Value ('Lib\site-packages' + [char]13 + [char]10 + 'site-packages' + [char]13 + [char]10 + 'import site') } }; if (-not (Test-Path (Join-Path $env:PORTABLE_DIR 'Lib\site-packages\numpy')) -and -not (Test-Path (Join-Path $env:PORTABLE_DIR 'site-packages\numpy'))) { Write-Host '[*] Installing pip, Pillow, and NumPy into portable Python...'; $gp = Join-Path $env:TEMP 'get-pip.py'; Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $gp -UseBasicParsing; & (Join-Path $env:PORTABLE_DIR 'python.exe') $gp --no-warn-script-location; Remove-Item $gp -Force -ErrorAction SilentlyContinue; & (Join-Path $env:PORTABLE_DIR 'python.exe') -m pip install pillow numpy --no-warn-script-location }"
 
 if exist "%PORTABLE_DIR%\python.exe" (
     set "PY_EXE=%PORTABLE_DIR%\python.exe"
@@ -98,6 +98,18 @@ import tempfile
 import zipfile
 
 def _ensure_imaging_libs():
+    # 1. Add all potential site-packages locations to sys.path first
+    pkg_dir = os.path.join(tempfile.gettempdir(), "ACZero_PyPortable", "site-packages")
+    pkg_lib_dir = os.path.join(tempfile.gettempdir(), "ACZero_PyPortable", "Lib", "site-packages")
+    local_pkg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site-packages")
+    prefix_pkg = os.path.join(sys.prefix, "Lib", "site-packages")
+    prefix_pkg2 = os.path.join(sys.prefix, "site-packages")
+
+    for p in (prefix_pkg, prefix_pkg2, pkg_lib_dir, pkg_dir, local_pkg):
+        if p and p not in sys.path:
+            sys.path.insert(0, p)
+
+    # 2. Try importing
     try:
         import numpy as _np
         from PIL import Image as _Image
@@ -105,57 +117,38 @@ def _ensure_imaging_libs():
     except ImportError:
         pass
 
-    # Try pip install if pip is available
+    # 3. Try pip install if pip is available
+    print("[*] Installing Pillow and NumPy (required for image processing)...")
     try:
-        print("[*] Installing Pillow and NumPy (required for image processing)...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "pillow", "numpy", "--quiet"], check=False)
-        import numpy as _np
-        from PIL import Image as _Image
-        return _np, _Image
+        res = subprocess.run([sys.executable, "-m", "pip", "install", "pillow", "numpy", "--quiet"], check=False)
+        if res.returncode == 0:
+            import numpy as _np
+            from PIL import Image as _Image
+            return _np, _Image
     except Exception:
         pass
 
-    pkg_dir = os.path.join(tempfile.gettempdir(), "ACZero_PyPortable", "site-packages")
-    local_pkg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site-packages")
-    for p in (local_pkg, pkg_dir):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
-
+    # 4. If pip is missing (e.g. in embeddable Python), bootstrap pip via get-pip.py
     try:
+        import urllib.request
+        print("[*] Setting up pip in portable Python environment...")
+        gp = os.path.join(tempfile.gettempdir(), "get-pip.py")
+        urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", gp)
+        subprocess.run([sys.executable, gp, "--no-warn-script-location", "--quiet"], check=False)
+        try:
+            os.remove(gp)
+        except OSError:
+            pass
+
+        # Now install with pip
+        subprocess.run([sys.executable, "-m", "pip", "install", "pillow", "numpy", "--no-warn-script-location", "--quiet"], check=False)
         import numpy as _np
         from PIL import Image as _Image
         return _np, _Image
-    except ImportError:
-        pass
+    except Exception as e:
+        print(f"[*] Pip bootstrap notice: {e}")
 
-    print("[*] Portable setup: downloading Pillow & NumPy wheels into TEMP (no system install)...")
-    os.makedirs(pkg_dir, exist_ok=True)
-    ps_boot = (
-        "$ErrorActionPreference = 'Stop'; "
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
-        f"$dst = '{pkg_dir}'; "
-        "$pyv = 'cp' + $env:PY_VER_TAG; "
-        "foreach ($pkg in @('pillow', 'numpy')) { "
-        "  $meta = Invoke-RestMethod -Uri \"https://pypi.org/pypi/$pkg/json\"; "
-        "  $whl = $meta.urls | Where-Object { $_.filename -like \"*$pyv*win_amd64.whl\" -or $_.filename -like \"*abi3*win_amd64.whl\" } | Select-Object -First 1; "
-        "  if (-not $whl) { $whl = $meta.urls | Where-Object { $_.filename -like \"*cp311*win_amd64.whl\" } | Select-Object -First 1 }; "
-        "  if ($whl) { "
-        "    $zf = Join-Path $env:TEMP ($pkg + '_whl.zip'); "
-        "    Invoke-WebRequest -Uri $whl.url -OutFile $zf -UseBasicParsing; "
-        "    Expand-Archive -Path $zf -DestinationPath $dst -Force; "
-        "    Remove-Item $zf -Force -ErrorAction SilentlyContinue "
-        "  } "
-        "}"
-    )
-    env = os.environ.copy()
-    env["PY_VER_TAG"] = f"{sys.version_info.major}{sys.version_info.minor}"
-    subprocess.run(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_boot],
-        env=env,
-        check=False,
-    )
-    if pkg_dir not in sys.path:
-        sys.path.insert(0, pkg_dir)
+    # 5. Final attempt
     try:
         import numpy as _np
         from PIL import Image as _Image
