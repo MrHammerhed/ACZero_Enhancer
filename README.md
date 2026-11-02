@@ -14,7 +14,11 @@ A modular, high-performance HD texture and font replacement framework for the **
 This repository hosts the core **HD Texture & Font Replacement Engine** (`acz_hdtex.dll`), the **Crash & Memory Diagnostics Module** (`memdump.dll`), the automated **Zero-Install Texture Converter & Installer** (`ACZ_Textures_installer.bat`), and an extensive suite of Python reverse engineering tools for PlayStation 2 / PC asset conversion.
 
 > **Compatibility Note**:
-> This framework has been tested **exclusively on the Standalone PC Port** version of *Ace Combat Zero: The Belkan War*.
+> This framework has been tested **exclusively on the Standalone PC Port** version of *Ace Combat Zero: The Belkan War*, and natively supports **both** executable releases out of the box:
+> * **v1.0.2.1** (`TimeDateStamp = 0x6A9E70E0`) — Initial release (separated from the AC8 bundle).
+> * **v2.0.0.1** (`TimeDateStamp = 0x6AC61130`, Steam AppID `5370600`) — Official separated standalone release.
+>
+> Both `acz_hdtex.dll` and `memdump.dll` automatically detect the running `acz.exe` version at startup and dynamically map all `.text`, `.rdata`, and `.data` RVAs (see [`VERSION_MAP.md`](VERSION_MAP.md) and [`acz_version_map.h`](acz_version_map.h)).
 
 ---
 
@@ -28,21 +32,21 @@ This repository hosts the core **HD Texture & Font Replacement Engine** (`acz_hd
 
 ## Key Components
 
-### 1. `acz_hdtex.dll` — HD Texture & Font Engine (v0.21)
+### 1. `acz_hdtex.dll` — HD Texture & Font Engine (v0.21.1)
 * **Direct D3D12 Replacement**: Intercepts `GIM` and `TIM2` textures loaded into PS2 GS VRAM / D3D12 upload heaps, replacing them with 32-bit RGBA PNG assets on the fly.
 * **Unified Master Font Atlases**: Replaces dynamic in-game fonts (`GameFont`) with high-resolution master font atlases (`MASTER_EN_font_32x32.png`), complete with per-glyph core centering, standard baseline height (`std_h`) alignment, and automatic subtitle bracket generation.
 * **Lock-Free Render Thread**: Utilizes a 512-Kbit Bloom filter and a 64K lock-free hash table to ensure zero stutter or frame drops during gameplay.
 * **TIM2 & SWAD Archive Support**: Transparently decodes and replaces textures packed inside `.swa` (`SWAD`) menu archives (`AircraftSelect.swa`, `MainSelect.swa`, `Shop.swa`) with auto-padding for non-power-of-two assets.
 * **Smart Texture Dumping**: Dumps in-game textures and font atlases to disk for reverse engineering and community asset creation.
 
-### 2. `memdump.dll` — Diagnostics & Crash Logger (v0.16)
+### 2. `memdump.dll` — Diagnostics & Crash Logger (v0.16.1)
 * **Completely Independent**: Runs standalone or alongside other mods without hard dependencies.
 * **Instant F2 Hotkey**: Press `F2` in-game to trigger an immediate diagnostic state report.
 * **Pre-Present D3D12 Screenshot**: Performs an asynchronous GPU DMA readback directly from the swapchain backbuffer, saving an uncompressed `screenshot.png` upon crashes or exit.
 * **Crash Triage**: Catches unhandled exceptions, records CPU registers and stack frames, generates standard Windows Minidumps (`acz_process.dmp`), and queries sibling modules for live VRAM and font status.
 * **Automated Cleanup**: Automatically prunes diagnostic dump folders older than 24 hours on game launch.
 
-### 3. `ACZ_Textures_installer.bat` — Portable Texture Pack Installer (v0.21)
+### 3. `ACZ_Textures_installer.bat` — Portable Texture Pack Installer (v0.21.1)
 * **Zero-Install Setup**: Runs out-of-the-box on standard Windows installations. If Python or required imaging packages are not installed, it automatically bootstraps an isolated, portable Python 3.11 runtime in `%TEMP%\ACZero_PyPortable` without modifying system environment variables.
 * **Automated Asset Conversion**: Automatically extracts, crops, adjusts aspect ratios, corrects PS2-to-PC alpha channels, and generates `.json` multi-hash companion metadata for:
   * OstrichMods HUD Upgrade (`actrilogy-hud-upgrade-v1.2.1.zip`)
@@ -67,8 +71,10 @@ This repository hosts the core **HD Texture & Font Replacement Engine** (`acz_hd
 ├── acz_hdtex.vcxproj               # VS Project file for acz_hdtex.dll
 ├── memdump.cpp                     # C++17 Crash Logger & Memory Dumper source
 ├── memdump.vcxproj                 # VS Project file for memdump.dll
+├── acz_version_map.h               # Automatic v1.0.2.1 / v2.0.0.1 RVA resolver
 ├── build_all.bat                   # One-click x64 MSVC build script
 ├── CHANGELOG.md                    # Detailed version history
+├── VERSION_MAP.md                  # Binary offset & RVA mapping table (1.0.2.1 vs 2.0.0.1)
 ├── LICENSE                         # MIT License (Non-Commercial)
 ├── README.md                       # This file
 │
@@ -99,7 +105,7 @@ This project requires the `version.dll` (v1.2) proxy modloader to load DLL plugi
 * Place `version.dll` directly into the game root folder (next to `acz.exe`).
 
 ### Step 2: Install ACZero Enhancer
-* Download the latest release (`ACZero_Enhancer_v0.21_Release.zip`) from [Releases](../../releases).
+* Download the latest release (`ACZero_Enhancer_v0.21.1_Release.zip`) from [Releases](../../releases).
 * Extract the archive directly into your game root directory (merging the `mods\` folder).
 
 ### Step 3: Install HD Textures (OstrichMods HUD Upgrade)

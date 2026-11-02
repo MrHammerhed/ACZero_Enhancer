@@ -75,14 +75,14 @@ exit /b %RET_CODE%
 """
 # -*- coding: utf-8 -*-
 r"""
-Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Texture Pack Installer & Converter (v0.21)
+Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Texture Pack Installer & Converter (v0.21.1)
 ======================================================================================================
 Zero-install portable .bat + Python installer and converter for:
   - "actrilogy-hud-upgrade-v1.2.1.zip" (by OstrichMods)
   - "custom textures.zip" (containing "For OstrichMods\" sources and ready-to-use "textures\" replacements)
 Extracts the Ace Combat Zero subfolder (SLUS-21346/replacements/hud-upgrade/) and converts all HUD,
 Aircraft Icon, Weapon Icon, Squadron Emblem, Master Font Atlas, and Hangar Weapon Atlas textures into
-ready-to-use replacements for acz_hdtex.dll (v0.21) without requiring manual Python/Pillow/NumPy setup.
+ready-to-use replacements for acz_hdtex.dll (v0.21.1) without requiring manual Python/Pillow/NumPy setup.
 """
 
 import base64
@@ -159,7 +159,7 @@ def _ensure_imaging_libs():
 
 np, Image = _ensure_imaging_libs()
 
-PLUGIN_VERSION = "v0.21 (ACZero Enhancer)"
+PLUGIN_VERSION = "v0.21.1 (ACZero Enhancer)"
 ACZ_SUBPATH_PREFIX = "SLUS-21346/replacements/hud-upgrade/"
 
 AIRCRAFT_MAP = {'1288ce8874c60963-368bd523e0f6c443-00001993.png': 'm29a_06006AE1983ADAA8.png',

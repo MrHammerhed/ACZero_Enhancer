@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — Universal HD Texture Replacer
-// File: acz_hdtex.cpp (v0.21 — Full-Cell Centered HD Glyphs + Uniform Family Baseline + Subtitle Brackets GIM)
+// File: acz_hdtex.cpp (v0.21.1 — Dual-Version v1.0.2.1 & v2.0.0.1 Support + Full-Cell Centered HD Glyphs)
 // Build: Visual Studio 2026 x64 (Release) -> acz_hdtex.dll
 // Usage: Place acz_hdtex.dll into "<GameDir>\mods\acz_hdtex.dll"
 //        Configuration is stored in "<GameDir>\mods\enhancer\acz_hdtex.ini"
@@ -76,6 +76,8 @@
 //                  that caused right-bleed cleaning to erase parts of already-centered glyphs in dumps.
 //                - Added automatic 4x HD compositing for subtitle bracket GIM texture BB10DED7AB6393C6
 //                  (<<, >>, [, ], —) from cells #701..#703 at the bottom of MASTER_EN_font_32x32.png.
+//   v0.21.1    : Added automatic dual-version executable support (v1.0.2.1 & v2.0.0.1) via
+//                acz_version_map.h (DetectAczExeVersion, AczRva) and prologue verification.
 // ============================================================================
 
 #define WIN32_LEAN_AND_MEAN
@@ -107,12 +109,65 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* PLUGIN_VERSION_STR = "v0.21";
+static constexpr const char* PLUGIN_VERSION_STR = "v0.21.1";
 static constexpr uint16_t    CUSTOM_EXTRATEX_TAG = 0x7FFF;
 static constexpr uint32_t    MAX_CUSTOM_TEXTURES = 65535;
 static constexpr uint64_t    FNV1A_64_OFFSET     = 0xCBF29CE484222325ULL;
 static constexpr uint64_t    FNV1A_64_PRIME      = 0x00000100000001B3ULL;
 static constexpr size_t      PS2_GS_VRAM_SIZE    = 4u * 1024u * 1024u; // 4 MB (16384 blocks * 256 bytes)
+
+// ----------------------------------------------------------------------------
+// Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
+// ----------------------------------------------------------------------------
+enum class AczExeVersion : uint32_t {
+    V1_0_2_1 = 0, // Initial Release (TimeDateStamp = 0x6A9E70E0, SizeOfImage = 0x0385D000)
+    V2_0_0_1 = 1  // Standalone Steam Release (TimeDateStamp = 0x6AC61130, SizeOfImage = 0x0389B000)
+};
+
+static AczExeVersion g_AczVersion = AczExeVersion::V1_0_2_1;
+
+static AczExeVersion DetectAczExeVersion(uintptr_t exe_base) {
+    if (exe_base == 0) return AczExeVersion::V1_0_2_1;
+    __try {
+        if (*reinterpret_cast<const uint16_t*>(exe_base) == 0x5A4Du) {
+            const uint32_t lfanew = *reinterpret_cast<const uint32_t*>(exe_base + 0x3Cu);
+            if (lfanew >= 0x40u && lfanew < 0x1000u) {
+                const uintptr_t nt = exe_base + lfanew;
+                const uint32_t ts = *reinterpret_cast<const uint32_t*>(nt + 0x08u);
+                const uint32_t img_size = *reinterpret_cast<const uint32_t*>(nt + 0x50u);
+                if (ts == 0x6AC61130u || img_size >= 0x03890000u) return AczExeVersion::V2_0_0_1;
+                if (ts == 0x6A9E70E0u || img_size == 0x0385D000u) return AczExeVersion::V1_0_2_1;
+            }
+        }
+        const uint8_t* p2001 = reinterpret_cast<const uint8_t*>(exe_base + 0x00203F40u);
+        if (p2001[0] == 0x40u && p2001[1] == 0x53u && p2001[2] == 0x48u && p2001[3] == 0x89u) {
+            return AczExeVersion::V2_0_0_1;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return AczExeVersion::V1_0_2_1;
+}
+
+static const char* GetAczExeVersionString(AczExeVersion ver) {
+    return (ver == AczExeVersion::V2_0_0_1) ? "2.0.0.1 (Standalone Steam)" : "1.0.2.1 (Initial Release)";
+}
+
+static uintptr_t AczRva(uintptr_t rva_1021) {
+    if (g_AczVersion != AczExeVersion::V2_0_0_1) return rva_1021;
+    if (rva_1021 < 0x004CA0u) return rva_1021;
+    if (rva_1021 < 0x004E80u) return rva_1021 + 0x0010u;
+    if (rva_1021 < 0x18AD20u) return rva_1021 + 0x0040u;
+    if (rva_1021 < 0x18D7A4u) return rva_1021 + 0x0680u;
+    if (rva_1021 < 0x18E520u) return rva_1021 + 0x0685u;
+    if (rva_1021 < 0x21E068u) return rva_1021 + 0x0680u;
+    if (rva_1021 < 0x27B000u) return rva_1021 + 0x1900u;
+    if (rva_1021 == 0x0027B2E8u) return 0x0027D2F8u;
+    if (rva_1021 == 0x0027B6F0u) return 0x0027D6E8u;
+    if (rva_1021 >= 0x00308F00u && rva_1021 < 0x00309000u) return rva_1021 + 0x2600u;
+    if (rva_1021 < 0x00309000u) return rva_1021 + 0x2238u;
+    if (rva_1021 < 0x00330000u) return rva_1021 + 0x3000u;
+    return rva_1021 + 0x3020u;
+}
 
 // Validated RVAs in acz.exe (ImageBase = 0x140000000)
 // Hook 1: InitGimDescriptor            (+0x2038C0, 14-byte prologue)
@@ -5975,10 +6030,12 @@ static void InitializePlugin(const AczAddonApi* api) {
     }
 
     g_ExeBase = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    g_AczVersion = DetectAczExeVersion(g_ExeBase);
     LogMsg("[ACZ_HDTex] ================================================================");
     LogMsg("[ACZ_HDTex]  ACZ Universal HD Texture & Font Replacer %s", PLUGIN_VERSION_STR);
     LogMsg("[ACZ_HDTex] ================================================================");
-    LogMsg("[ACZ_HDTex] Game executable base: %p", reinterpret_cast<void*>(g_ExeBase));
+    LogMsg("[ACZ_HDTex] Game executable base: %p (Detected version: %s)",
+           reinterpret_cast<void*>(g_ExeBase), GetAczExeVersionString(g_AczVersion));
     LogMsg("[ACZ_HDTex] Textures folder:      %s", g_TexturesDir.string().c_str());
     LogMsg("[ACZ_HDTex] Config: EnableLogging=%d, DumpAllGims=%d, DumpReplacedTextures=%d, DumpRawGimFiles=%d, HotReload=%d, AutoShareFontGlyphs=%d, DumpMasterFontAtlas=%d, DumpMergedFamilyAtlases=%d, DumpIndividualFontAtlases=%d",
            g_EnableLogging ? 1 : 0, g_DumpAllGims ? 1 : 0,
@@ -5988,10 +6045,10 @@ static void InitializePlugin(const AczAddonApi* api) {
            g_DumpIndividualFontAtlases ? 1 : 0);
 
     g_InvalidateGsVramRange = reinterpret_cast<FnInvalidateGsVramRange>(
-        g_ExeBase + RVA_InvalidateGsVramRange
+        g_ExeBase + AczRva(RVA_InvalidateGsVramRange)
     );
     g_CreateTextureFromPngMemory = reinterpret_cast<FnCreateTextureFromPngMemory>(
-        g_ExeBase + RVA_CreateTextureFromPngMemory
+        g_ExeBase + AczRva(RVA_CreateTextureFromPngMemory)
     );
 
     ScanTexturesDirectory();
@@ -5999,7 +6056,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok1 = InstallDetour64(
         "InitGimDescriptor",
-        g_ExeBase + RVA_InitGimDescriptor,
+        g_ExeBase + AczRva(RVA_InitGimDescriptor),
         PROLOGUE_InitGim,
         sizeof(PROLOGUE_InitGim),
         reinterpret_cast<const void*>(&Hook_InitGimDescriptor),
@@ -6008,7 +6065,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok2 = InstallDetour64(
         "BuildGimGifPacket",
-        g_ExeBase + RVA_BuildGimGifPacket,
+        g_ExeBase + AczRva(RVA_BuildGimGifPacket),
         PROLOGUE_BuildGif,
         sizeof(PROLOGUE_BuildGif),
         reinterpret_cast<const void*>(&Hook_BuildGimGifPacket),
@@ -6017,7 +6074,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok3 = InstallDetour64(
         "BuildGimPixelOnlyGifPacket",
-        g_ExeBase + RVA_BuildGimPixelOnlyGifPacket,
+        g_ExeBase + AczRva(RVA_BuildGimPixelOnlyGifPacket),
         PROLOGUE_BuildGifPix,
         sizeof(PROLOGUE_BuildGifPix),
         reinterpret_cast<const void*>(&Hook_BuildGimPixelOnlyGifPacket),
@@ -6026,7 +6083,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok4 = InstallDetour64(
         "BuildGimArrayGifPackets",
-        g_ExeBase + RVA_BuildGimArrayGifPackets,
+        g_ExeBase + AczRva(RVA_BuildGimArrayGifPackets),
         PROLOGUE_BuildGifArr,
         sizeof(PROLOGUE_BuildGifArr),
         reinterpret_cast<const void*>(&Hook_BuildGimArrayGifPackets),
@@ -6035,7 +6092,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok5 = InstallDetour64(
         "GsUploadVramBlock",
-        g_ExeBase + RVA_GsUploadVramBlock,
+        g_ExeBase + AczRva(RVA_GsUploadVramBlock),
         PROLOGUE_GsUploadVram,
         sizeof(PROLOGUE_GsUploadVram),
         reinterpret_cast<const void*>(&Hook_GsUploadVramBlock),
@@ -6044,7 +6101,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok6 = InstallDetour64(
         "LookupOrCreateGsTexture",
-        g_ExeBase + RVA_LookupOrCreateGsTexture,
+        g_ExeBase + AczRva(RVA_LookupOrCreateGsTexture),
         PROLOGUE_LookupTex,
         sizeof(PROLOGUE_LookupTex),
         reinterpret_cast<const void*>(&Hook_LookupOrCreateGsTexture),
@@ -6053,7 +6110,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok7 = InstallDetour64(
         "GameFont_Init",
-        g_ExeBase + RVA_GameFontInit,
+        g_ExeBase + AczRva(RVA_GameFontInit),
         PROLOGUE_GameFontInit,
         sizeof(PROLOGUE_GameFontInit),
         reinterpret_cast<const void*>(&Hook_GameFontInit),
@@ -6062,7 +6119,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok8 = InstallDetour64(
         "GameFont_UploadStringGlyphs",
-        g_ExeBase + RVA_GameFontUploadStringGlyphs,
+        g_ExeBase + AczRva(RVA_GameFontUploadStringGlyphs),
         PROLOGUE_GameFontUpload,
         sizeof(PROLOGUE_GameFontUpload),
         reinterpret_cast<const void*>(&Hook_GameFontUploadStringGlyphs),
@@ -6071,7 +6128,7 @@ static void InitializePlugin(const AczAddonApi* api) {
 
     bool ok9 = InstallDetour64(
         "LoadTextureFromArcPath",
-        g_ExeBase + RVA_LoadTextureFromArcPath,
+        g_ExeBase + AczRva(RVA_LoadTextureFromArcPath),
         PROLOGUE_LoadTextureFromArc,
         sizeof(PROLOGUE_LoadTextureFromArc),
         reinterpret_cast<const void*>(&Hook_LoadTextureFromArcPath),
