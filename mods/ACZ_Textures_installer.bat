@@ -1418,7 +1418,7 @@ def parse_master_txt_bytes(txt_bytes: bytes, default_dim: int) -> tuple:
             continue
         if mode == "sections":
             ms = re.search(
-                r"Family=([0-9A-Fa-f]{16})(?:\s*\[\d+x\d+\])?\s*\((\d+)[^\)]*,\s*(\d+)\s*(?:blocks|блоков)\)\s*\|\s*(?:Sample|Пример):\s*\"(.*)\"",
+                r"Family=([0-9A-Fa-f]{16})(?:\s*\[\d+x\d+\])?\s*\((\d+)[^\)]*,\s*(\d+)\s*blocks\)\s*\|\s*Sample:\s*\"(.*)\"",
                 raw,
             )
             if ms:
@@ -1877,7 +1877,7 @@ def build_master_font_atlases(
             total_blocks_32 = sum(s["blocks"] for s in secs_32)
             with open(os.path.join(out_fonts_dir, txt32_name), "w", encoding="utf-8", newline="\n") as f:
                 f.write("====================================================================\n")
-                f.write(" Master Font Atlas [EN] — Все 32x32 глифы языка в одном файле (4x, без дубликатов)\n")
+                f.write(" Master Font Atlas [EN] — Unified 32x32 Language Font Atlas (4x HD, Deduplicated)\n")
                 f.write("====================================================================\n")
                 f.write("Master Atlas Name:     MASTER_EN_font_32x32\n")
                 f.write("Language:              EN\n")
@@ -1889,13 +1889,13 @@ def build_master_font_atlases(
                 f.write("To replace all 32x32 (and linked 16x16) fonts in-game:\n")
                 f.write("  Copy edited MASTER_EN_font_32x32.png, .txt, AND .json into mods\\textures\\\n")
                 f.write("--------------------------------------------------------------------\n")
-                f.write("TYPEFACE SECTIONS IN THIS MASTER ATLAS (Секции гарнитур по порядку):\n")
+                f.write("TYPEFACE SECTIONS IN THIS MASTER ATLAS:\n")
                 for s in secs_32:
                     r0, r1 = s["start"] // cols, s["end"] // cols
                     f.write(
                         f"  * Glyphs #{s['start']:03d}..#{s['end']:03d} (rows {r0}..{r1}): "
-                        f"Family={s['family']} ({s['count']} уникальных глифов, "
-                        f"{s['blocks']} блоков) | Пример: \"{s['sample']}\"\n"
+                        f"Family={s['family']} ({s['count']} unique glyphs, "
+                        f"{s['blocks']} blocks) | Sample: \"{s['sample']}\"\n"
                     )
                 f.write("--------------------------------------------------------------------\n")
                 f.write("GLYPH METRICS (Grid 16 columns):\n")
@@ -2051,17 +2051,17 @@ def prompt_post_conversion_cleanup(
     bat_abs = os.path.abspath(script_path) if script_path and os.path.isfile(script_path) else ""
 
     print("")
-    print("Cleanup Options (Очистка остаточных файлов после конвертации):")
-    print("  [1] Keep all archives and this .bat converter (Оставить всё как есть) [Default]")
-    print("  [2] Delete residual archives only (Удалить только исходные .zip архивы и папку spw)")
-    print("  [3] Delete BOTH residual archives AND this .bat converter (Удалить архивы И этот .bat файл)")
+    print("Cleanup Options:")
+    print("  [1] Keep all archives and this .bat converter [Default]")
+    print("  [2] Delete residual archives only")
+    print("  [3] Delete BOTH residual archives AND this .bat converter")
     try:
-        ans = input("Select option / Выберите вариант [1/2/3 or y/N]: ").strip().lower()
+        ans = input("Select option [1/2/3 or y/N]: ").strip().lower()
     except EOFError:
         return 0
 
-    delete_archives = ans in ("2", "3", "y", "yes", "д", "да")
-    delete_self = ans in ("3", "y", "yes", "д", "да")
+    delete_archives = ans in ("2", "3", "y", "yes")
+    delete_self = ans in ("3", "y", "yes")
 
     if delete_archives:
         for zp in archives_to_clean:

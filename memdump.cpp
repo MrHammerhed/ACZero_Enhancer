@@ -1,36 +1,12 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Diagnostic Memory Dumper
-// File: memdump.cpp (v0.16.1 — Dual-Version v1.0.2.1 & v2.0.0.1 Support, F2 Hotkey & Crash Handler)
+// File: memdump.cpp (v0.16.3 — On-Demand D3D12 Backbuffer Readback, Fence Sync, Dual-Version Support, F2 Hotkey & Crash Handler)
 // Build: Visual Studio 2026 x64 (Release) -> memdump.dll
 // Usage: Place memdump.dll into "<GameDir>\mods\memdump.dll" (loaded by version.dll 1.2)
 //        Configuration is stored in "<GameDir>\mods\enhancer\memdump.ini"
 //        Dumps and screenshots are written to "<GameDir>\mods\memory_dumps\"
 //        Operates 100% independently of enhancer.dll and acz_hdtex.dll (automatically
 //        bridges with them at runtime if they are loaded in the process).
-//
-// Version History:
-//   v0.1..v0.12: Initial diagnostic memory dumper, crash handler, and F2 hotkey monitor.
-//   v0.13      : Added IAT hooks on ExitProcess (+0x27B2E8) and PostQuitMessage (+0x27B6F0)
-//                for clean pre-loader-lock exit dumps, SetUnhandledExceptionFilter crash
-//                handler, DbgHelp MiniDumpWriteDump (acz_process.dmp), and optional runtime
-//                bridge to acz_hdtex.dll (4 MB PS2 GS VRAM + live RAM resources).
-//   v0.14      : Added automatic D3D12 pre-Present framebuffer capture (screenshot.png)!
-//                Hooks EndFrameAndPresent (+0x20C280) right before the rendered backbuffer
-//                is transitioned to PRESENT and sent to the monitor via IDXGISwapChain::Present,
-//                performing a zero-stall GPU DMA copy into double-buffered persistently mapped
-//                D3D12_HEAP_TYPE_READBACK buffers. Automatically writes screenshot.png into
-//                each dump folder on F2, crash, or exit (using WIC with a crash-safe pure-C++
-//                PNG encoder fallback).
-//   v0.15      : Added 10-bit per channel unpacking for DXGI_FORMAT_R10G10B10A2_UNORM (format=24,
-//                used by acz.exe's D3D12 SwapChain) in SafeCopyReadbackToRgba, alongside RGBA8
-//                and BGRA8. Added automatic startup cleanup of old memory dump folders
-//                (AutoDeleteOldDumps=1, MaxDumpAgeHours=24 by default).
-//   v0.16      : Separated into standalone memdump.dll (mods\memdump\memdump.ini) for the
-//                ACZero Enhancer modular suite. Added optional runtime state bridge to
-//                enhancer.dll (AczEnhancer_WriteStateSummary) alongside acz_hdtex.dll while
-//                operating 100% standalone when other DLLs are absent.
-//   v0.16.1    : Added automatic dual-version executable support (v1.0.2.1 & v2.0.0.1) via
-//                acz_version_map.h for EndFrameAndPresent, IAT hooks, and D3D12 globals.
 // ============================================================================
 
 #define WIN32_LEAN_AND_MEAN
@@ -64,7 +40,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.1";
+static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.3";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -113,9 +89,10 @@ static uintptr_t AczRva(uintptr_t rva_1021) {
     if (rva_1021 < 0x27B000u) return rva_1021 + 0x1900u;
     if (rva_1021 == 0x0027B2E8u) return 0x0027D2F8u;
     if (rva_1021 == 0x0027B6F0u) return 0x0027D6E8u;
+    if (rva_1021 < 0x002CEEF0u) return rva_1021 + 0x2040u;
     if (rva_1021 >= 0x00308F00u && rva_1021 < 0x00309000u) return rva_1021 + 0x2600u;
     if (rva_1021 < 0x00309000u) return rva_1021 + 0x2238u;
-    if (rva_1021 < 0x00330000u) return rva_1021 + 0x3000u;
+    if (rva_1021 < 0x00324600u) return rva_1021 + 0x3000u;
     return rva_1021 + 0x3020u;
 }
 
@@ -213,6 +190,8 @@ static FnPostQuitMessage            g_OrigPostQuitMessage           = nullptr;
 static FnEndFrameAndPresent         g_OrigEndFrameAndPresent        = nullptr;
 static FnMiniDumpWriteDump          g_MiniDumpWriteDump             = nullptr;
 static LPTOP_LEVEL_EXCEPTION_FILTER g_PrevExceptionFilter           = nullptr;
+static PVOID                        g_VectoredContinueHandle        = nullptr;
+static std::atomic<bool>            g_CrashDumpDone{false};
 
 static fs::path                     g_GameDir;
 static fs::path                     g_ModsDir;
@@ -725,10 +704,46 @@ static bool SafeInspectBackbufferDesc(
     }
 }
 
-static void __fastcall Hook_EndFrameAndPresent() {
-    uint32_t captured_slot = 0xFFFFFFFFu;
+static LONG WINAPI CrashDumpExceptionFilter(PEXCEPTION_POINTERS exc_ptrs);
 
-    if (g_EnableMemoryDump && g_SaveScreenshotOnDump &&
+static std::atomic<bool> g_RequestImmediateCapture{false};
+
+// Waits for the GPU command queue fence signaled inside EndFrameAndPresent (+0x20C411)
+// for the specified backbuffer slot so the D3D12_HEAP_TYPE_READBACK buffer has valid pixels.
+static void WaitForSlotFenceCompletionSeh(uint8_t* d3d_ctx, uint32_t slot) {
+    if (!d3d_ctx || slot >= kReadbackSlotCount) return;
+    __try {
+        ID3D12Fence* fence = *reinterpret_cast<ID3D12Fence* const*>(d3d_ctx + 0x68);
+        uint64_t target_val = *reinterpret_cast<const uint64_t*>(d3d_ctx + static_cast<size_t>(slot) * 8u + 0x70);
+        if (!fence || target_val == 0) return;
+        for (int i = 0; i < 100; ++i) {
+            if (fence->GetCompletedValue() >= target_val) {
+                break;
+            }
+            Sleep(1);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void __fastcall Hook_EndFrameAndPresent() {
+    static bool s_reasserted_filter = false;
+    static uint32_t s_present_frame_counter = 0;
+    if (!s_reasserted_filter && g_EnableMemoryDump) {
+        s_reasserted_filter = true;
+        LPTOP_LEVEL_EXCEPTION_FILTER prev = SetUnhandledExceptionFilter(&CrashDumpExceptionFilter);
+        if (prev != &CrashDumpExceptionFilter && prev != nullptr) {
+            g_PrevExceptionFilter = prev;
+        }
+    }
+    uint32_t captured_slot = 0xFFFFFFFFu;
+    uint8_t* captured_d3d_ctx = nullptr;
+    ++s_present_frame_counter;
+    bool immediate_req = g_RequestImmediateCapture.exchange(false, std::memory_order_acq_rel);
+    // Use an odd interval (59 frames) so background refresh alternates between backbuffer slots 0 and 1
+    bool want_capture = immediate_req || (s_present_frame_counter <= 4u) || ((s_present_frame_counter % 59u) == 0u);
+
+    if (want_capture && g_EnableMemoryDump && g_SaveScreenshotOnDump &&
         !g_ShuttingDown.load(std::memory_order_relaxed) && g_ExeBase != 0) {
         uint64_t ctx_u64 = 0;
         if (SafeReadU64(g_ExeBase + AczRva(RVA_GlobalD3D12Context), &ctx_u64) && ctx_u64 != 0) {
@@ -742,7 +757,9 @@ static void __fastcall Hook_EndFrameAndPresent() {
                 std::unique_lock<std::mutex> lock(g_ReadbackMutex, std::try_to_lock);
                 if (lock.owns_lock()) {
                     if (EnsureReadbackBuffersLocked(device, w, h, pitch, total, fmt)) {
-                        if (!TryRecordBackbufferReadbackSeh(d3d_ctx, &captured_slot)) {
+                        if (TryRecordBackbufferReadbackSeh(d3d_ctx, &captured_slot)) {
+                            captured_d3d_ctx = d3d_ctx;
+                        } else {
                             captured_slot = 0xFFFFFFFFu;
                         }
                     }
@@ -754,6 +771,9 @@ static void __fastcall Hook_EndFrameAndPresent() {
     g_OrigEndFrameAndPresent();
 
     if (captured_slot != 0xFFFFFFFFu) {
+        if (immediate_req && captured_d3d_ctx != nullptr) {
+            WaitForSlotFenceCompletionSeh(captured_d3d_ctx, captured_slot);
+        }
         g_LastCapturedSlot.store(captured_slot, std::memory_order_release);
         g_TotalCapturedFrames.fetch_add(1, std::memory_order_release);
     }
@@ -780,12 +800,14 @@ static bool SafeCopyReadbackToRgba(
                                      format == DXGI_FORMAT_B8G8R8X8_UNORM ||
                                      format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
 
+        uint32_t non_zero_rgb = 0;
         for (uint32_t y = 0; y < height; ++y) {
             const uint8_t* src_row = mapped_src + static_cast<size_t>(y) * row_pitch;
             uint8_t*       dst_row = dst_rgba   + static_cast<size_t>(y) * width * 4u;
             if (is_r10g10b10a2) {
                 for (uint32_t x = 0; x < width; ++x) {
                     uint32_t px  = *reinterpret_cast<const uint32_t*>(src_row + static_cast<size_t>(x) * 4u);
+                    non_zero_rgb |= (px & 0x3FFFFFFFu);
                     uint32_t r10 = px & 0x3FFu;
                     uint32_t g10 = (px >> 10) & 0x3FFu;
                     uint32_t b10 = (px >> 20) & 0x3FFu;
@@ -796,21 +818,29 @@ static bool SafeCopyReadbackToRgba(
                 }
             } else if (is_bgra) {
                 for (uint32_t x = 0; x < width; ++x) {
-                    dst_row[x * 4 + 0] = src_row[x * 4 + 2]; // R
-                    dst_row[x * 4 + 1] = src_row[x * 4 + 1]; // G
-                    dst_row[x * 4 + 2] = src_row[x * 4 + 0]; // B
-                    dst_row[x * 4 + 3] = 255u;               // Opaque A
+                    uint8_t b = src_row[x * 4 + 0];
+                    uint8_t g = src_row[x * 4 + 1];
+                    uint8_t r = src_row[x * 4 + 2];
+                    non_zero_rgb |= (r | g | b);
+                    dst_row[x * 4 + 0] = r;    // R
+                    dst_row[x * 4 + 1] = g;    // G
+                    dst_row[x * 4 + 2] = b;    // B
+                    dst_row[x * 4 + 3] = 255u; // Opaque A
                 }
             } else {
                 for (uint32_t x = 0; x < width; ++x) {
-                    dst_row[x * 4 + 0] = src_row[x * 4 + 0]; // R
-                    dst_row[x * 4 + 1] = src_row[x * 4 + 1]; // G
-                    dst_row[x * 4 + 2] = src_row[x * 4 + 2]; // B
-                    dst_row[x * 4 + 3] = 255u;               // Opaque A
+                    uint8_t r = src_row[x * 4 + 0];
+                    uint8_t g = src_row[x * 4 + 1];
+                    uint8_t b = src_row[x * 4 + 2];
+                    non_zero_rgb |= (r | g | b);
+                    dst_row[x * 4 + 0] = r;    // R
+                    dst_row[x * 4 + 1] = g;    // G
+                    dst_row[x * 4 + 2] = b;    // B
+                    dst_row[x * 4 + 3] = 255u; // Opaque A
                 }
             }
         }
-        return true;
+        return (non_zero_rgb != 0);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -990,7 +1020,7 @@ static void LoadMemDumpConfigIni() {
             fprintf(f,
                 "; ============================================================================\n"
                 "; Ace Combat Zero: The Belkan War — Diagnostic Memory Dumper Configuration (%s)\n"
-                "; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Used by: mods\\memdump.dll and ACZero_Enhancer.exe\n"
+                "; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Used by: mods\\memdump.dll\n"
                 "; ============================================================================\n\n"
                 "[MemoryDump]\n"
                 "; EnableLogging: Write [MemDump] events directly into modloader.log\n"
@@ -1294,6 +1324,25 @@ static void PerformFullMemoryAndStateDump(
     LogMsg("[MemDump] ================================================================");
 }
 
+static bool IsFatalExceptionCode(DWORD code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:
+        case EXCEPTION_IN_PAGE_ERROR:
+        case EXCEPTION_ILLEGAL_INSTRUCTION:
+        case EXCEPTION_PRIV_INSTRUCTION:
+        case EXCEPTION_STACK_OVERFLOW:
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        case EXCEPTION_INT_OVERFLOW:
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+        case EXCEPTION_DATATYPE_MISALIGNMENT:
+        case 0xC0000374u: // STATUS_HEAP_CORRUPTION
+        case 0xC0000409u: // STATUS_STACK_BUFFER_OVERRUN
+            return true;
+        default:
+            return false;
+    }
+}
+
 static LONG WINAPI CrashDumpExceptionFilter(PEXCEPTION_POINTERS exc_ptrs) {
     if (g_EnableMemoryDump) {
         char tag[64];
@@ -1353,6 +1402,16 @@ static DWORD WINAPI HotkeyMonitorThread(LPVOID lpParam) {
                 GetWindowThreadProcessId(fg_wnd, &fg_pid);
             }
             if (fg_pid == self_pid) {
+                if (g_SaveScreenshotOnDump) {
+                    uint64_t prev_frames = g_TotalCapturedFrames.load(std::memory_order_acquire);
+                    g_RequestImmediateCapture.store(true, std::memory_order_release);
+                    for (int wait_i = 0; wait_i < 12; ++wait_i) {
+                        if (g_TotalCapturedFrames.load(std::memory_order_acquire) != prev_frames) {
+                            break;
+                        }
+                        Sleep(5);
+                    }
+                }
                 PerformFullMemoryAndStateDump("F2_Hotkey", nullptr, true);
                 Beep(880, 90);
             }

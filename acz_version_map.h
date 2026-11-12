@@ -97,6 +97,7 @@ inline uintptr_t AczResolveRva(uintptr_t rva_1021, AczExeVersion ver) {
     if (rva_1021 < 0x00309000u) return rva_1021 + 0x2238u; // .rdata constants
 
     // 3. .data & BSS globals (0x309000+ in 1.0.2.1)
-    if (rva_1021 < 0x00330000u) return rva_1021 + 0x3000u; // Initialized .data (e.g. 0x31CF18 -> 0x31FF18)
+    if (rva_1021 < 0x00324600u) return rva_1021 + 0x3000u; // Initialized .data (e.g. 0x31CF18 -> 0x31FF18, 0x31DFC8 -> 0x320FC8)
+    // BSS globals (e.g. 0x32C8F8 -> 0x32F918, 0x33AC70 -> 0x33DC90, 0x33ACE8 -> 0x33DD08)
     return rva_1021 + 0x3020u; // BSS globals (e.g. 0x33AC70 -> 0x33DC90, 0x33ACE8 -> 0x33DD08, 0x33DA48 -> 0x340A68)
 }

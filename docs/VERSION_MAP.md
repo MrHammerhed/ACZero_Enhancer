@@ -38,7 +38,7 @@ All plugins (`acz_hdtex.dll`, `memdump.dll`, `enhancer.dll`) include `acz_versio
 
 Why did `.text` shift piecewise?
 1. **`+0x0010` at `0x004CA0`**: A small 16-byte adjustment in an early initialization helper.
-2. **`+0x0040` at `0x004E80 .. 0x18AD1F`**: `48` bytes added at the end of `0x004CA0..0x004E7F`. Every single core PS2/mission/aircraft/camera/terrain/HUD function in `0x004E80 .. 0x18AD1F` is 100% byte-identical and shifted by exactly **`+0x0040`**.
+2. **`+0x0040` at `0x004E80 .. 0x18AD1F`**: `48` bytes added at the end of `0x004CA0..0x004E7F`. Every single core PS2/mission/aircraft/camera/HUD function in `0x004E80 .. 0x18AD1F` is 100% byte-identical and shifted by exactly **`+0x0040`**.
 3. **`+0x0680` at `0x18B800 .. 0x21E067`**: `2.0.0.1` inserted a new SteamAppId (`5370600`) / standalone launcher verification block at `0x18AD20 .. 0x18B7FF` (`+0x0640` additional bytes). Every single GS VRAM, GIM/TIM2/FHM parser, GameFont, and D3D12 renderer function in `0x18E520 .. 0x21E067` is 100% byte-identical and shifted by exactly **`+0x0680`**.
 4. **`.arc` VFS (`0x222000 .. 0x226500`)**: `2.0.0.1` updated the `.arc` virtual filesystem to mount and read `c.arc` alongside `a.arc`, `b.arc`, and `d.arc`.
 
@@ -46,7 +46,7 @@ Why did `.text` shift piecewise?
 | :--- | :---: | :--- |
 | `0x00001000 .. 0x00004C9F` | `+0x0000` | Early CRT / entry helpers |
 | `0x00004CA0 .. 0x00004E7F` | `+0x0010` | Init helpers |
-| `0x00004E80 .. 0x0018AD1F` | **`+0x0040`** | Mission logic, camera, HUD, `BuildGimArrayGifPackets` (`0x14CA50 -> 0x14CA90`), terrain/sky/tree LOD & clip planes |
+| `0x00004E80 .. 0x0018AD1F` | **`+0x0040`** | Mission logic, camera, HUD, `BuildGimArrayGifPackets` (`0x14CA50 -> 0x14CA90`) & 3D projection helpers |
 | `0x0018B800 .. 0x0018D7A3` | **`+0x0680`** | Early platform/window helpers |
 | `0x0018D7A4 .. 0x0018E51F` | `+0x0685` | Window/input message loop |
 | `0x0018E520 .. 0x0021E067` | **`+0x0680`** | **All GS VRAM, GIM, TIM2, FHM, GameFont, and D3D12 functions** (`acz_hdtex.dll` & `memdump.dll` `EndFrameAndPresent`) |
@@ -72,6 +72,10 @@ Why did `.text` shift piecewise?
 | `ParseFhmGimContainer` | `0x00203D90` | `0x00204410` | `+0x0680` | `48 89 5C 24 10 48 89 74` |
 | `LoadTextureFromArcPath` | `0x00214230` | `0x002148B0` | `+0x0680` | `48 89 5C 24 08 48 89 74` |
 | `CreateTextureFromPngMemory` | `0x00214420` | `0x00214AA0` | `+0x0680` | `40 55 53 56 57 41 54 41` |
+| `EngineAlloc` | `0x00200DE0` | `0x00201460` | `+0x0680` | `48 89 5C 24 08 48 89 74` |
+| `LoadSwadArchive` | `0x00204440` | `0x00204AC0` | `+0x0680` | `48 89 5C 24 10 48 89 6C` |
+| `GameOptions` (`.data`) | `0x0031DFC8` | `0x00320FC8` | `+0x3000` | — |
+| `EngineAllocCtx` (`.data`) | `0x0032C8F8` | `0x0032F918` | `+0x3020` | — |
 | `GlobalPs2GsVramPtr` (`.data`) | `0x0031CF18` | `0x0031FF18` | `+0x3000` | — |
 | `GlobalD3D12Context` (`.data`) | `0x0033AC70` | `0x0033DC90` | `+0x3020` | — |
 | `GlobalD3D12CmdList` (`.data`) | `0x0033ACE8` | `0x0033DD08` | `+0x3020` | — |
