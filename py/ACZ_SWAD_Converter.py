@@ -508,8 +508,8 @@ def patch_swg_to_widescreen(swg_bytes: bytes, aspect: str = "16x9") -> bytes:
                         struct.pack_into("<f", buf, roff + 28, w_full)
                     else:
                         struct.pack_into("<f", buf, roff + 28, w_full)
-                elif abs(w - 16.0) < 1e-3 and abs(h - 128.0) < 1e-3 and midx == 0:
-                    # Scanline quad placed with m00 = 32.0
+                elif abs(w - 16.0) < 1e-3 and abs(h - 128.0) < 1e-3 and midx == 0 and tex <= 5:
+                    # Scanline quad placed with m00 = 32.0 (exclude scrollbar thumbs with tex > 5)
                     struct.pack_into("<f", buf, roff + 28, w_full / 32.0)
                 elif menu_name == "MainSelect" and di == 13:
                     col1_scale = ((x0_left + 216.0 * K) - (22.5 + dx_left)) / 195.0
@@ -904,7 +904,7 @@ def patch_swg_to_widescreen(swg_bytes: bytes, aspect: str = "16x9") -> bytes:
                     else:
                         for m in mats:
                             tx = struct.unpack_from("<f", buf, t0_off + m * 64 + 48)[0]
-                            if tx < 200.0:
+                            if tx < (150.0 if menu_name == "DetailMap" else 200.0):
                                 m_left.add(m)
                             elif tx >= 300.0:
                                 m_right.add(m)
@@ -918,6 +918,28 @@ def patch_swg_to_widescreen(swg_bytes: bytes, aspect: str = "16x9") -> bytes:
             moff = t0_off + m * 64
             tx = struct.unpack_from("<f", buf, moff + 48)[0]
             struct.pack_into("<f", buf, moff + 48, tx + dx_right)
+
+        if menu_name == "AircraftSelect":
+            # Normal hangar mode scrollbar thumb (Mat[127], vanilla 4:3 tx = 483.50)
+            norm_off = 1.666668 if aspect == "16x9" else 1.50
+            struct.pack_into("<f", buf, t0_off + 127 * 64 + 48, 483.50 + dx_right + norm_off)
+            # DISPLAY camera mode scrollbar thumb (Mat[305..326]): track in entry_003 is shifted by -x0_left (+85.333336 in 16:9, +192.0 in 21:9)
+            disp_off = 1.50 if aspect == "16x9" else 1.625
+            disp_thumb_vanilla = {
+                305: 491.25, 311: 489.75, 312: 488.50, 314: 487.30,
+                315: 486.25, 317: 485.45, 319: 484.75, 321: 484.20,
+                323: 483.80, 325: 483.60, 326: 483.50,
+            }
+            for midx, vtx in disp_thumb_vanilla.items():
+                struct.pack_into("<f", buf, t0_off + midx * 64 + 48, vtx - x0_left + disp_off)
+        elif menu_name == "AircraftData":
+            # Normal mode scrollbar thumb (Mat[94], vanilla 4:3 tx = 483.50)
+            norm_off = 1.666668 if aspect == "16x9" else 1.50
+            struct.pack_into("<f", buf, t0_off + 94 * 64 + 48, 483.50 + dx_right + norm_off)
+        elif menu_name == "Shop":
+            # Normal mode scrollbar thumb (Mat[337], vanilla 4:3 tx = 483.50)
+            norm_off = 1.666668 if aspect == "16x9" else 1.50
+            struct.pack_into("<f", buf, t0_off + 337 * 64 + 48, 483.50 + dx_right + norm_off)
 
         if menu_name == "DetailMap":
             strings_pool = _load_sym_pool(buf, 0xD8)

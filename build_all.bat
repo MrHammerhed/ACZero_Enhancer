@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ============================================================================
-echo  ACZero Enhancer (v0.23.4) — Visual Studio 2026 / 2022 One-Click Build Script
-echo  Targets: enhancer.dll (v0.23.4), acz_hdtex.dll (v0.23.4), memdump.dll (v0.16.3)
+echo  ACZero Enhancer (v0.23.5) — Visual Studio 2026 / 2022 One-Click Build Script
+echo  Targets: enhancer.dll (v0.23.5), acz_hdtex.dll (v0.23.5), memdump.dll (v0.16.3)
 echo ============================================================================
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -36,7 +36,7 @@ if not exist "%~dp0build" mkdir "%~dp0build"
 if not exist "%~dp0mods" mkdir "%~dp0mods"
 
 if exist "%~dp0enhancer.cpp" (
-    echo [*] Building enhancer.dll ^(v0.23.4^)...
+    echo [*] Building enhancer.dll ^(v0.23.5^)...
     cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.dll" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
     copy /y "%~dp0build\enhancer.dll" "%~dp0mods\enhancer.dll" >nul
@@ -50,7 +50,7 @@ if exist "%~dp0memdump.cpp" (
 )
 
 if exist "%~dp0acz_hdtex.cpp" (
-    echo [*] Building acz_hdtex.dll ^(v0.23.4^)...
+    echo [*] Building acz_hdtex.dll ^(v0.23.5^)...
     cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0acz_hdtex.cpp" /Fe:"%~dp0build\acz_hdtex.dll" /Fo:"%~dp0build\\" user32.lib ole32.lib windowscodecs.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
     copy /y "%~dp0build\acz_hdtex.dll" "%~dp0mods\acz_hdtex.dll" >nul

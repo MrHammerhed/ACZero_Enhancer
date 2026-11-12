@@ -1,4 +1,4 @@
-# ACZero Enhancer (v0.23.4) — Project Changelog and File Registry
+# ACZero Enhancer (v0.23.5) — Project Changelog and File Registry
 
 This document provides a registry of all modules, plugins, and tools for the **ACZero Enhancer** project for the standalone PC port of *Ace Combat Zero: The Belkan War*, along with the version history for each file.
 
@@ -9,20 +9,19 @@ All DLL plugins located in the `mods\` directory are automatically loaded by the
 | File | Current Version | Build Target (VS 2026 / 2022) | Configuration / Directory | Purpose |
 | ----- | ----- | ----- | ----- | ----- |
 | **`acz_version_map.h`** | **v0.21.1** | C++17 Header | Included in all DLLs | Automatic runtime version detection and piecewise RVA / RIP-disp32 mapping between `acz.exe` **v1.0.2.1** and **v2.0.0.1** (documented in `docs/VERSION_MAP.md`). |
-| **`enhancer.cpp`** | **v0.23.4** | C++17 DLL (`mods\enhancer.dll`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input & frame-pacing engine: 60 FPS frame-pacing unlocker, D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
-| **`acz_hdtex.cpp`** | **v0.23.4** | C++17 DLL (`mods\acz_hdtex.dll`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`), native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
+| **`enhancer.cpp`** | **v0.23.5** | C++17 DLL (`mods\enhancer.dll`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input & frame-pacing engine: 60 FPS frame-pacing unlocker, D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
+| **`acz_hdtex.cpp`** + **`acz_tex_installer.h`** | **v0.23.5** | C++17 DLL (`mods\acz_hdtex.dll`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`), built-in native C++ texture pack auto-installer & OstrichMods converter, native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
 | **`memdump.cpp`** | **v0.16.3** | C++17 DLL (`mods\memdump.dll`) | `mods\enhancer\memdump.ini`, `mods\memory_dumps\` | Independent diagnostic memory & state dumper (`F2` in-game hotkey, crash and exit hooks, on-demand pre-`Present` D3D12 `screenshot.png` capture, `acz_process.dmp` minidumps, auto-cleanup of old dumps, sibling module state queries). |
-| **`ACZ_Textures_installer.bat`** | **v8.1** | Portable `.bat` + Python | `mods\textures\ostrichmods\`, `mods\textures\` | Standalone installer & converter for OstrichMods HUD pack, controller glyph packs, custom textures, and companion metadata with Zero-Install portable Python environment. |
 | **`py\ACZ_Resource_Scanner.py`** | **v9** | Python Tool | `py\` | Global scanner for extracted game archives (`a.arc`, `d.arc`) and builder for unified language master font atlases (`MASTER_<LANG>_font_*.png`). |
 | **`py\ACZ_TIM2_Scanner.py`** | **v1** | Python Tool | `py\` | Universal `TIM2` scanner and converter for `.swa` (`SWAD`), `.fhm`, `.msa`, `.bin`, and `.tm2` containers to `PNG` + `.json` with triple-hash support. |
 | **`py\ACZ_FHM_Converter.py`** | **v5** | Python Tool | `py\` | Container unpacker/packer for `.FHM`, font metric tables, and dynamic `*Pmenu.fhm` fonts with batch export mode for `acz_hdtex.dll`. |
 | **`py\ACZ_GIM_PNG_Converter.py`** | **v5** | Python Tool | `py\` | Direct two-way `GIM <-> PNG` converter (4-bit `PSMT4` and 8-bit `PSMT8`, `CSM1` palette descrambling, 32-bit RGBA, `FNV-1a` 64-bit hashing). |
-| **`py\ACZ_SWAD_Converter.py`** | **v1** | Python Tool | `py\` | Container unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives. |
+| **`py\ACZ_SWAD_Converter.py`** | **v1.0.1** | Python Tool | `py\` | Container unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives. |
 | **`py\ACZ_SWG_Visual_Editor.py`** | **v1** | Python Tool | `py\` | Interactive WYSIWYG GUI editor for `.swa` / `.swg` menu layouts, timelines, and matrix transformations (`4:3`, `16:9`, `21:9`). |
 
 ## 2. Component Changelogs
 
-### 2.1. `enhancer.cpp` (`mods\enhancer.dll`) — Current Version: **v0.23.4**
+### 2.1. `enhancer.cpp` (`mods\enhancer.dll`) — Current Version: **v0.23.5**
 
 Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, subtitles, and 3D FOV), controller input engine, and 60 FPS frame-pacing plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\enhancer.ini`. Operates fully standalone or in synergy with `acz_hdtex.dll`.
 
@@ -72,8 +71,6 @@ Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, 
 
 * **v0.23.4 (Input Engine Overhaul, 2-Player Co-Op / VS Mode Support, Pause Menu Fixes & Engine Heap/DMA Expansion):**
 
-  * **Fixed Swapped Left & Right Analog Sticks:** Removed manual analog stick overriding inside `Hook_PollAllInputDevices` (`+0x21BA50`) that had inverted Left Stick (`+0x08`, `lX`/`lY` roll/pitch) and Right Stick (`+0x10`, `lZ`/`lRz` camera look).
-
   * **Radial Stick Deadzones & Softened DualSense/DS4 HID Vibration:** Added smooth radial deadzones (`16%` Left Stick, `18%` Right Stick) in native PlayStation DirectInput mode to eliminate stick drift, and softened raw HID output reports (`0x02` USB / `0x31` Bluetooth) to `60%` low-frequency rumble and capped high-frequency motor intensity (`80/255`) to match XInput vibration feel.
 
   * **DualSense Touchpad Mapped to View (Radar Switch):** Mapped DualSense Touchpad Click (`Button 14` / `rgbButtons[13]`) directly to `View / Select` (radar size toggle) instead of duplicating `Create / Share`.
@@ -86,7 +83,11 @@ Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, 
 
   * **Expanded Main Engine Heap & Per-Frame 3D GIF DMA Stream Buffer (`RVA +0x1FF35C`..`+0x1FF456`):** Expanded the main engine heap (`64 MB -> 128 MB`) and the double-buffered per-frame 3D GIF DMA packet stream buffer (`2 MB -> 8 MB` total, `1 MB -> 4 MB` per frame) to prevent DMA buffer overflow into the adjacent GS display context `*(0x14032c8b8)` (`0xC0000005` at `RVA +0x1FFA2D`).
 
-### 2.2. `acz_hdtex.cpp` (`mods\acz_hdtex.dll`) — Current Version: **v0.23.4**
+* **v0.23.5 (Save-Safe `ScreenAspect` Persistence & Widescreen Menu Scrollbar Thumb Alignment):**
+
+  * **Save-Safe Aspect Ratio Persistence (`[Widescreen] ScreenAspect = 0 | 1 | 2` in `enhancer.ini`):** Hooks `SwgOptionSetAspect` (`RVA +0x1F3850`), `CSysData::Save` (`RVA +0x1895B0`), and `CSysData::Load` (`RVA +0x1895E0`) so the save file on disk always stores vanilla-compatible `16:9` (`1`) while the active runtime aspect ratio (`0 = 4:3`, `1 = 16:9`, `2 = 21:9`) is persisted in `enhancer.ini` and synchronized every frame in `SyncSwgInstanceAspect`.
+
+### 2.2. `acz_hdtex.cpp` (`mods\acz_hdtex.dll`) — Current Version: **v0.23.5**
 
 Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\acz_hdtex.ini`, replacement textures are loaded from `mods\textures\`. Operates fully standalone or in synergy with `enhancer.dll`.
 
@@ -174,6 +175,14 @@ Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2
 
   * **Synchronized `Unlock2PlayerCampaign` INI Parsing:** Reads `Unlock2PlayerCampaign` from both `acz_hdtex.ini` and `enhancer.ini` using valid 4-argument `GetPrivateProfileIntA` calls (`g_ini_path.c_str()` and sibling `enhancer.ini` path), resolving `C2660` / `C2065` build errors.
 
+* **v0.23.5 (Built-In Native C++ Texture Pack Auto-Installer, Aircraft Icon Mapping Fix & 4:3 Tier Caching Fix):**
+
+  * **Built-In Native C++ Texture Pack Auto-Installer (`acz_tex_installer.h`):** Ported the entire OstrichMods PCSX2 HUD & Hangar converter and custom texture pack installer directly into C++ inside `acz_hdtex.dll` (`AutoInstallTexturePacksIfPresent`, controlled by `AutoInstallTexturePacks=1` and `DeleteSourceArchivesAfterInstall=0` in `acz_hdtex.ini`). Includes a self-contained RFC 1951 `DEFLATE` / `ZIP` reader, WIC PNG decoder/encoder, separable Lanczos-3 premultiplied-alpha resampler, PS2-to-PC alpha scaler, 36 composite `2048x1024` hangar weapon atlas builder, 60 `320x320` TIM2 hangar weapon icons, 19 `512x512` TIM2 weapon trajectory diagrams, and `8x`/`4x` Master Font Atlas builder (`MASTER_EN_font_64x64.png`, `MASTER_EN_font_32x32.png` + `.json` with `16x16` donor mapping). Completely eliminates `mods\ACZ_Textures_installer.bat` for full NexusMods and antivirus compatibility.
+
+  * **Fixed `zoef` (ADF-01 FALKEN) & `mrgn` (ADFX-01/02 Morgan) Aircraft Icon Mapping:** Corrected the swapped source hash mapping between `zoef_D6E7F13AB1C907BF.png` and `mrgn_4579101E74130E99.png` in `kAircraftMap` and bumped `.install_stamp` to `ACZ_NATIVE_INSTALLER_V2`.
+
+  * **Fixed `4:3` Base Texture Tier Caching (`GetOrLoadCustomTexForTier`):** Fixed a bug where switching to `4:3` (`eff_tier == 0`) after loading `16:9` or `21:9` menu textures did not update `g_SlotLoadedTexTier[0][id]`, causing `4:3` menus to reuse cached widescreen scrollbar frames.
+
 ### 2.3. `memdump.cpp` (`mods\memdump.dll`) — Current Version: **v0.16.3**
 
 Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer capture plugin. Configuration is stored in `mods\enhancer\memdump.ini`, dumps are saved to `mods\memory_dumps\`.
@@ -226,9 +235,9 @@ Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer captur
 
   * Synchronized dual-version RVA mapping thresholds (`0x002CEEF0` `.rdata` table alignment and `0x00324600` `BSS` globals threshold) with `acz_version_map.h`.
 
-### 2.4. `ACZ_Textures_installer.bat` — Current Version: **v8.1**
+### 2.4. `acz_tex_installer.h` (Formerly `ACZ_Textures_installer.bat` v8.1) — Built-In C++ Auto-Installer
 
-Standalone portable installer and converter for OstrichMods HUD pack (`actrilogy-hud-upgrade-v1.2.1.zip`), controller glyph packs, and custom textures.
+Native C++ port of the OstrichMods HUD pack (`actrilogy-hud-upgrade-v1.2.1.zip`) and `custom textures.zip` installer embedded directly into `acz_hdtex.dll` (replacing the standalone `.bat` script).
 
 * **v1 – v4:** Cropping aircraft icons (`384x384 -> 288x288`), weapon icons (`256x256`), squadron emblems (16:9 to 4:3 correction), generation of multi-hash `.json` files, assembly of 36 weapon atlases (`2048x1024`), PS2-to-PC alpha correction (`* 255 / 128`), and generation of 60 hangar weapon `TIM2` textures (`320x320`).
 
@@ -248,6 +257,6 @@ Standalone portable installer and converter for OstrichMods HUD pack (`actrilogy
 
 * **`py\ACZ_GIM_PNG_Converter.py` (v5):** Two-way converter for 4-bit (`PSMT4`) and 8-bit (`PSMT8`) `.gim` textures to 32-bit RGBA PNGs with `CSM1` descrambling and 64-bit `FNV-1a` naming.
 
-* **`py\ACZ_SWAD_Converter.py` (v1):** Unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives.
+* **`py\ACZ_SWAD_Converter.py` (v1.0.1):** Unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives.
 
 * **`py\ACZ_SWG_Visual_Editor.py` (v1):** Interactive WYSIWYG GUI editor for `.swa` / `.swg` menu layouts, timelines, and matrix transformations (`4:3`, `16:9`, `21:9`).

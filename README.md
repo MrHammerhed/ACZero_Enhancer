@@ -1,4 +1,4 @@
-# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.23.4)
+# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.23.5)
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](https://microsoft.com/windows)
@@ -11,7 +11,7 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ## Overview
 
-**ACZero Enhancer** consists of three independent C++17 DLL plugins (`enhancer.dll`, `acz_hdtex.dll`, `memdump.dll`), the **Zero-Install Texture Converter & Installer** (`ACZ_Textures_installer.bat`), and a Python reverse-engineering and menu-authoring utility suite (`py/`).
+**ACZero Enhancer** consists of three independent C++17 DLL plugins (`enhancer.dll`, `acz_hdtex.dll`, `memdump.dll`) — with a **Built-In Native C++ Texture Pack Auto-Installer & OstrichMods Converter** (`acz_tex_installer.h`) integrated directly inside `acz_hdtex.dll` — plus a Python reverse-engineering and menu-authoring utility suite (`py/`).
 
 > **Compatibility Note**:
 > This framework has been tested **exclusively on the Standalone PC Port** version of *Ace Combat Zero: The Belkan War*, and natively supports **both** executable releases out of the box:
@@ -32,7 +32,7 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ## Key Components
 
-### 1. `enhancer.dll` — Widescreen 16:9/21:9, HUD, Subtitles, Input & 60 FPS Engine (v0.23.4)
+### 1. `enhancer.dll` — Widescreen 16:9/21:9, HUD, Subtitles, Input & 60 FPS Engine (v0.23.5)
 * **Full 16:9 & 21:9 Widescreen Custom Menu Engine**: Dynamically loads 16:9 and 21:9 custom menu layouts (`<menu>_16x9.swa`, `<menu>_21x9.swa`) across all 31 in-game menus with 9-slice frame scaling, edge-to-edge coverage, 21:9 `Display Settings` option (`OptionSetAspect=2`) with save persistence, and aspect-correct briefing/cutscene video playback.
 * **Hor+ 21:9 3D FOV & Gameplay HUD Adaptation**: True Hor+ 3D camera FOV in 21:9 mode, unstretched 1:1 3D reticles/target boxes/compass, corner-anchored `SCORE`/`TIME`/target lists (plus 3rd-person `SPEED`/`ALT` corner anchoring), compact target labels, full-width debriefing tactical map, and uniform 12.4 subpixel X-scaling for radio/cutscene subtitles, mission title cards, and loading screen quotes.
 * **DirectInput / XInput Controller & Keyboard Input Fixes**:
@@ -40,7 +40,7 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
   * Seamless single-player input merging (`Unlock2PlayerCampaign=0` by default) or split 2-Player Co-Op / VS Mode (`Unlock2PlayerCampaign=1`, where Player 1 is controlled by Gamepad and Player 2 independently by Keyboard).
 * **60 FPS Frame-Pacing Unlocker & Memory Pool Expansion**: Disables the broken 30.0 FPS catch-up trap (`RVA +0x20BCAF`) and expands the main engine heap (`128 MB`), per-frame 3D GIF DMA stream buffer (`8 MB`), and D3D12 texture/upload pools.
 
-### 2. `acz_hdtex.dll` — HD Texture, Font, DDS Cache & Glyph Engine (v0.23.4)
+### 2. `acz_hdtex.dll` — HD Texture, Font, DDS Cache & Glyph Engine (v0.23.5)
 * **Autonomous BC7 / BGRA8 `.dds_cache` Engine & Direct D3D12 Replacement**: Compiles replacement PNGs to `BC7 Mode 6` and `BGRA8` `.dds_cache` files on the fly with Display P3 -> sRGB color normalization, loading HD textures directly into D3D12 with zero runtime PNG decode overhead.
 * **Live Controller & Keyboard Glyph Auto-Switching (`GamepadGlyphs = AUTO | PS | XBOX | KB`)**: Automatically detects active input across PlayStation, Xbox, and Keyboard every frame and swaps all menu/HUD button prompts (`pads/`).
 * **Unified Master Font Atlases**: Replaces dynamic in-game fonts (`GameFont`) with high-resolution master font atlases (`MASTER_EN_font_32x32.png`, `MASTER_EN_font_64x64.png`), complete with per-glyph core centering, standard baseline height (`std_h`) alignment, and automatic subtitle bracket generation.
@@ -51,9 +51,9 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 * **Instant F2 Hotkey & On-Demand D3D12 Screenshot**: Press `F2` in-game to trigger an immediate diagnostic state report and pre-`Present` D3D12 backbuffer `screenshot.png`.
 * **Crash Triage & Automated Cleanup**: Catches unhandled exceptions, records CPU registers and stack frames, generates standard Windows Minidumps (`acz_process.dmp`), queries sibling modules for live state, and prunes dump folders older than 24 hours on launch.
 
-### 4. `ACZ_Textures_installer.bat` — Portable Texture Pack Installer (v8.1)
-* **Zero-Install Setup**: Automatically bootstraps an isolated, portable Python 3.11 runtime in `%TEMP%\ACZero_PyPortable` if Python/Pillow is not installed.
-* **Automated Asset Conversion**: Unpacks, crops, adjusts aspect ratios, corrects PS2-to-PC alpha channels, and generates `.json` multi-hash companion metadata for OstrichMods HUD Upgrade (`actrilogy-hud-upgrade-v1.2.1.zip`) and `custom textures.zip`.
+### 4. Built-In Native C++ Texture Pack Auto-Installer (`acz_tex_installer.h` inside `acz_hdtex.dll`)
+* **Zero External Scripts or `.bat` Files**: Runs natively in C++ inside `acz_hdtex.dll` on startup before `ScanTexturesDirectory()`.
+* **Automated Asset Conversion**: Automatically detects `actrilogy-hud-upgrade-v1.2.1.zip` and `custom textures.zip` placed in `mods\`, extracts and converts aircraft/weapon/HUD icons, corrects PS2-to-PC alpha channels, assembles 36 composite `2048x1024` hangar weapon atlases, builds `8x`/`4x` HD Master Font Atlases (`MASTER_EN_font_64x64.png`, `MASTER_EN_font_32x32.png` + `.json`), and records an `.install_stamp` so subsequent launches start instantaneously.
 
 ### 5. Python Utility Suite (`py/`)
 * **`ACZ_Resource_Scanner.py` (v9)**: Scans extracted `.arc` / `.fhm` containers, clusters font families (`FAMILY_*`), and generates unified multi-language master font atlases.
@@ -72,14 +72,13 @@ This project requires the `version.dll` (v1.2) proxy modloader to load DLL plugi
 * Place `version.dll` directly into the game root folder (next to `acz.exe`).
 
 ### Step 2: Install ACZero Enhancer
-* Download the latest release (`ACZero_Enhancer_v0.23.4_Release.zip`) from [Releases](../../releases).
+* Download the latest release (`ACZero_Enhancer_v0.23.5_Release.zip`) from [Releases](../../releases).
 * Extract the archive directly into your game root directory (merging the `mods\` folder).
 
 ### Step 3: Install HD Textures (OstrichMods HUD Upgrade)
 1. Download `actrilogy-hud-upgrade-v1.2.1.zip` from the official [OstrichMods Trilogy page](https://ostrichmods.com/trilogy.html).
-2. Place the downloaded `actrilogy-hud-upgrade-v1.2.1.zip` into the `mods\` directory (do not extract it manually).
-3. Run `mods\ACZ_Textures_installer.bat`. The script will automatically unpack, convert, and place all converted HUD, weapon, font, and squadron textures into `mods\textures\`.
-4. Launch the game via `acz.exe`.
+2. Place the downloaded `actrilogy-hud-upgrade-v1.2.1.zip` and `custom textures.zip` directly into the `mods\` directory (do not extract it manually).
+3. Launch the game via `acz.exe`. On first startup, `acz_hdtex.dll` will automatically unpack, convert, and install all HUD, weapon, font, and squadron textures into `mods\textures\` and prebuild the `.dds_cache`.
 
 ---
 

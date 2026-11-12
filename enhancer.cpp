@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Core Plugin
-// File: enhancer.cpp (v0.23.4 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker & DirectInput/XInput/KB Input Engine)
+// File: enhancer.cpp (v0.23.5 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker & DirectInput/XInput/KB Input Engine)
 // Build: Visual Studio 2026 / 2022 x64 (Release) -> enhancer.dll
 // Usage: Place enhancer.dll into "<GameDir>\mods\enhancer.dll" (loaded by version.dll 1.2)
 //        Configuration is stored in "<GameDir>\mods\enhancer\enhancer.ini"
@@ -37,7 +37,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* ENHANCER_VERSION_STR = "v0.23.4";
+static constexpr const char* ENHANCER_VERSION_STR = "v0.23.5";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)

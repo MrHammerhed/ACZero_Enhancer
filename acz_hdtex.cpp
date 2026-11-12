@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — Universal HD Texture Replacer
-// File: acz_hdtex.cpp (v0.23.4 — Live Controller/Keyboard Auto-Detect, Controls Screen Diagram Swapper, 2P Co-Op Config & DDS Cache Engine)
+// File: acz_hdtex.cpp (v0.23.5 — Built-In Native C++ Texture Pack Auto-Installer, Live Controller/Keyboard Auto-Detect & DDS Cache Engine)
 // Build: Visual Studio 2026 x64 (Release) -> acz_hdtex.dll
 // Usage: Place acz_hdtex.dll into "<GameDir>\mods\acz_hdtex.dll"
 //        Configuration is stored in "<GameDir>\mods\enhancer\acz_hdtex.ini"
@@ -39,7 +39,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* PLUGIN_VERSION_STR = "v0.23.4";
+static constexpr const char* PLUGIN_VERSION_STR = "v0.23.5";
 static constexpr uint16_t    CUSTOM_EXTRATEX_TAG = 0x7FFF;
 static constexpr uint32_t    MAX_CUSTOM_TEXTURES = 65535;
 static constexpr uint64_t    FNV1A_64_OFFSET     = 0xCBF29CE484222325ULL;
@@ -553,6 +553,8 @@ static bool                                                        g_EnableDdsCa
 static int                                                         g_DdsCacheCompression              = 1; // 1 = Smart BC7 4:1 for >=256x256 + BGRA8 for small icons, 0 = Lossless BGRA8 DDS
 static bool                                                        g_DumpMergedFamilyAtlases          = false;
 static bool                                                        g_DumpIndividualFontAtlases        = false;
+static bool                                                        g_AutoInstallTexturePacks          = true;
+static bool                                                        g_DeleteSourceArchivesAfterInstall = false;
 
 // ============================================================================
 // Lock-Free Fast-Path Structures for Render Thread & GS Upload Thread (v0.13)
@@ -1362,6 +1364,8 @@ static void EncodeRgbaToPngBytes(const uint8_t* rgba, uint32_t width, uint32_t h
     AppendPngChunk(out_png, "IDAT", idat.data(), idat.size());
     AppendPngChunk(out_png, "IEND", nullptr, 0);
 }
+
+#include "acz_tex_installer.h"
 
 // ============================================================================
 // Autonomous DDS Texture Cache & Direct D3D12 Loader (BC7 Mode 6 & BGRA8)
@@ -4062,7 +4066,15 @@ static void LoadConfigIni() {
                 ";                PS   = Force PlayStation 5 DualSense glyphs & manual diagram\n"
                 ";                XBOX = Force Xbox Series X|S glyphs & stock Xbox manual diagram\n"
                 ";                KB   = Force Keyboard glyphs & stock Keyboard manual diagram\n"
-                "GamepadGlyphs=AUTO\n",
+                "GamepadGlyphs=AUTO\n"
+                "\n"
+                "; AutoInstallTexturePacks: Automatically extract and convert 'actrilogy-hud-upgrade-v1.2.1.zip'\n"
+                ";                          and 'custom textures.zip' placed in 'mods\\' on startup (1 = on, 0 = off)\n"
+                "AutoInstallTexturePacks=1\n"
+                "\n"
+                "; DeleteSourceArchivesAfterInstall: Set to 1 to automatically delete source .zip archives\n"
+                ";                                   from 'mods\\' after conversion succeeds (0 = keep archives)\n"
+                "DeleteSourceArchivesAfterInstall=0\n",
                 PLUGIN_VERSION_STR
             );
             fclose(f);
@@ -4091,6 +4103,8 @@ static void LoadConfigIni() {
     g_MenuAspectMode                = ReadHdIniInt("MenuAspectMode", 0);
     g_EnableDdsCache                = ReadHdIniInt("EnableDdsCache", 1) != 0;
     g_DdsCacheCompression           = ReadHdIniInt("DdsCacheCompression", 1);
+    g_AutoInstallTexturePacks       = ReadHdIniInt("AutoInstallTexturePacks", 1) != 0;
+    g_DeleteSourceArchivesAfterInstall = ReadHdIniInt("DeleteSourceArchivesAfterInstall", 0) != 0;
 
     char pad_buf[64] = {};
     GetPrivateProfileStringA("Settings", "GamepadGlyphs", "", pad_buf, sizeof(pad_buf), ini_path.string().c_str());
@@ -9283,6 +9297,12 @@ static void InitializePlugin(const AczAddonApi* api) {
     AutoResolveD3D12TextureCallTargets(reinterpret_cast<const uint8_t*>(g_CreateTextureFromPngMemory));
 
     EnsureD3D12TexturePoolsExpanded();
+    acz_installer::AutoInstallTexturePacksIfPresent(
+        g_ModsDir,
+        g_TexturesDir,
+        g_AutoInstallTexturePacks,
+        g_DeleteSourceArchivesAfterInstall
+    );
     ScanTexturesDirectory();
     PreloadExistingDumpedMasterFontAtlases();
     PrebuildDdsCacheOnStartup();
