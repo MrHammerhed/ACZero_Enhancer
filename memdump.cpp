@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Diagnostic Memory Dumper
-// File: memdump.cpp (v0.16.1 — Dual-Version v1.0.2.1 & v2.0.0.1 Support, F2 Hotkey & Crash Handler)
+// File: memdump.cpp (v0.16.2 — Dual-Version v1.0.2.1 & v2.0.0.1 Support, F2 Hotkey & Crash Handler)
 // Build: Visual Studio 2026 x64 (Release) -> memdump.dll
 // Usage: Place memdump.dll into "<GameDir>\mods\memdump.dll" (loaded by version.dll 1.2)
 //        Configuration is stored in "<GameDir>\mods\enhancer\memdump.ini"
@@ -31,6 +31,9 @@
 //                operating 100% standalone when other DLLs are absent.
 //   v0.16.1    : Added automatic dual-version executable support (v1.0.2.1 & v2.0.0.1) via
 //                acz_version_map.h for EndFrameAndPresent, IAT hooks, and D3D12 globals.
+//   v0.16.2    : Added VectoredContinueHandler fallback (AddVectoredContinueHandler) for fatal
+//                hardware exceptions, post-WinMain SetUnhandledExceptionFilter re-assertion on
+//                the first frame of EndFrameAndPresent, and atomic single-dump guard.
 // ============================================================================
 
 #define WIN32_LEAN_AND_MEAN
@@ -64,7 +67,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.1";
+static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.2";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -93,7 +96,8 @@ static AczExeVersion DetectAczExeVersion(uintptr_t exe_base) {
         if (p2001[0] == 0x40u && p2001[1] == 0x53u && p2001[2] == 0x48u && p2001[3] == 0x89u) {
             return AczExeVersion::V2_0_0_1;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return AczExeVersion::V1_0_2_1;
 }
@@ -213,6 +217,8 @@ static FnPostQuitMessage            g_OrigPostQuitMessage           = nullptr;
 static FnEndFrameAndPresent         g_OrigEndFrameAndPresent        = nullptr;
 static FnMiniDumpWriteDump          g_MiniDumpWriteDump             = nullptr;
 static LPTOP_LEVEL_EXCEPTION_FILTER g_PrevExceptionFilter           = nullptr;
+static PVOID                        g_VectoredContinueHandle = nullptr;
+static std::atomic<bool>            g_CrashDumpDone{ false };
 
 static fs::path                     g_GameDir;
 static fs::path                     g_ModsDir;
@@ -725,7 +731,17 @@ static bool SafeInspectBackbufferDesc(
     }
 }
 
+static LONG WINAPI CrashDumpExceptionFilter(PEXCEPTION_POINTERS exc_ptrs);
+
 static void __fastcall Hook_EndFrameAndPresent() {
+    static bool s_reasserted_filter = false;
+    if (!s_reasserted_filter && g_EnableMemoryDump) {
+        s_reasserted_filter = true;
+        LPTOP_LEVEL_EXCEPTION_FILTER prev = SetUnhandledExceptionFilter(&CrashDumpExceptionFilter);
+        if (prev != &CrashDumpExceptionFilter && prev != nullptr) {
+            g_PrevExceptionFilter = prev;
+        }
+    }
     uint32_t captured_slot = 0xFFFFFFFFu;
 
     if (g_EnableMemoryDump && g_SaveScreenshotOnDump &&
@@ -1294,15 +1310,52 @@ static void PerformFullMemoryAndStateDump(
     LogMsg("[MemDump] ================================================================");
 }
 
+static bool IsFatalExceptionCode(DWORD code) {
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_INT_OVERFLOW:
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+    case 0xC0000374u: // STATUS_HEAP_CORRUPTION
+    case 0xC0000409u: // STATUS_STACK_BUFFER_OVERRUN
+        return true;
+    default:
+        return false;
+    }
+}
+
 static LONG WINAPI CrashDumpExceptionFilter(PEXCEPTION_POINTERS exc_ptrs) {
     if (g_EnableMemoryDump) {
-        char tag[64];
-        DWORD code = (exc_ptrs && exc_ptrs->ExceptionRecord) ? exc_ptrs->ExceptionRecord->ExceptionCode : 0;
-        snprintf(tag, sizeof(tag), "CRASH_0x%08lX", code);
-        PerformFullMemoryAndStateDump(tag, exc_ptrs, true);
+        bool expected = false;
+        if (g_CrashDumpDone.compare_exchange_strong(expected, true)) {
+            char tag[64];
+            DWORD code = (exc_ptrs && exc_ptrs->ExceptionRecord) ? exc_ptrs->ExceptionRecord->ExceptionCode : 0;
+            snprintf(tag, sizeof(tag), "CRASH_0x%08lX", code);
+            PerformFullMemoryAndStateDump(tag, exc_ptrs, true);
+        }
     }
-    if (g_PrevExceptionFilter != nullptr && exc_ptrs != nullptr) {
+    if (g_PrevExceptionFilter != nullptr && g_PrevExceptionFilter != &CrashDumpExceptionFilter && exc_ptrs != nullptr) {
         return g_PrevExceptionFilter(exc_ptrs);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static LONG WINAPI VectoredCrashContinueHandler(PEXCEPTION_POINTERS exc_ptrs) {
+    if (g_EnableMemoryDump && exc_ptrs && exc_ptrs->ExceptionRecord) {
+        DWORD code = exc_ptrs->ExceptionRecord->ExceptionCode;
+        if (IsFatalExceptionCode(code)) {
+            bool expected = false;
+            if (g_CrashDumpDone.compare_exchange_strong(expected, true)) {
+                char tag[64];
+                snprintf(tag, sizeof(tag), "CRASH_0x%08lX", code);
+                PerformFullMemoryAndStateDump(tag, exc_ptrs, true);
+            }
+        }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -1428,6 +1481,7 @@ static void InitializeMemDumpPlugin(const AczAddonApi* api) {
 
     if (g_EnableMemoryDump) {
         g_PrevExceptionFilter = SetUnhandledExceptionFilter(&CrashDumpExceptionFilter);
+        g_VectoredContinueHandle = AddVectoredContinueHandler(1, &VectoredCrashContinueHandler);
 
         if (g_SaveScreenshotOnDump && g_ExeBase != 0) {
             InstallDetour64(
