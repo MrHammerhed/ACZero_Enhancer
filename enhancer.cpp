@@ -1,8 +1,8 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Core Plugin
-// File: enhancer.cpp (v0.23.5 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker & DirectInput/XInput/KB Input Engine)
-// Build: Visual Studio 2026 / 2022 x64 (Release) -> enhancer.dll
-// Usage: Place enhancer.dll into "<GameDir>\mods\enhancer.dll" (loaded by version.dll 1.2)
+// File: enhancer.cpp (v0.23.6 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker & DirectInput/XInput/KB Input Engine)
+// Build: Visual Studio 2026 / 2022 x64 (Release) -> enhancer.asi
+// Usage: Place enhancer.asi into "<GameDir>\mods\enhancer\enhancer.asi" (loaded by version.dll)
 //        Configuration is stored in "<GameDir>\mods\enhancer\enhancer.ini"
 //        Operates 100% independently of memdump.dll and acz_hdtex.dll.
 // ============================================================================
@@ -37,7 +37,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* ENHANCER_VERSION_STR = "v0.23.5";
+static constexpr const char* ENHANCER_VERSION_STR = "v0.23.6";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -289,10 +289,10 @@ static void LoadEnhancerConfigIni() {
             fprintf(f,
                 "; ============================================================================\n"
                 "; Ace Combat Zero: The Belkan War — ACZero Enhancer Configuration (%s)\n"
-                "; Used by: mods\\enhancer.dll\n"
+                "; Used by: mods\\enhancer\\enhancer.asi\n"
                 "; ============================================================================\n\n"
                 "[Enhancer]\n"
-                "; EnableLogging: Write [Enhancer] events directly into modloader.log (1 = Yes, 0 = No)\n"
+                "; EnableLogging: Write [Enhancer] events directly into mods\\enhancer\\enhancer.log (1 = Yes, 0 = No)\n"
                 "EnableLogging=1\n\n"
                 "; EnableMenuOverrides: Load custom 16:9 / 21:9 widescreen menu layouts from mods\\textures\\menus\\ (1 = Yes, 0 = No)\n"
                 "EnableMenuOverrides=1\n\n"
@@ -4091,10 +4091,11 @@ void InstallWidescreenAndUiHooks() {
     // Standalone Fallback: if acz_hdtex.dll is not installed on disk or in memory,
     // install a lightweight hook on GameFont_Init so select.msa displays "21:9" in Options!
     std::error_code ec;
-    bool hdtex_present = (GetModuleHandleA("acz_hdtex.dll") != nullptr) ||
-                         (GetModuleHandleA("acz_hdtex.asi") != nullptr) ||
-                         fs::exists(g_ModsDir / "acz_hdtex.dll", ec) ||
-                         fs::exists(g_ModsDir / "acz_hdtex.asi", ec);
+    bool hdtex_present = (GetModuleHandleA("acz_hdtex.asi") != nullptr) ||
+                         (GetModuleHandleA("acz_hdtex.dll") != nullptr) ||
+                         fs::exists(g_EnhancerDir / "acz_hdtex.asi", ec) ||
+                         fs::exists(g_ModsDir / "acz_hdtex.asi", ec) ||
+                         fs::exists(g_ModsDir / "acz_hdtex.dll", ec);
     if (!hdtex_present) {
         InstallDetour64(
             "GameFont_Init_21x9Fallback",
@@ -4240,7 +4241,7 @@ static void InitializeEnhancerPlugin(const AczAddonApi* api) {
     LoadEnhancerConfigIni();
 
     if (g_EnableLogging && g_ModLoaderLogFn == nullptr) {
-        fs::path modloader_log_path = g_GameDir / "modloader.log";
+        fs::path modloader_log_path = g_EnhancerDir / "enhancer.log";
         g_FallbackLogFile = _fsopen(modloader_log_path.string().c_str(), "a", _SH_DENYNO);
     }
 
@@ -4267,23 +4268,24 @@ static void InitializeEnhancerPlugin(const AczAddonApi* api) {
 }
 
 // ----------------------------------------------------------------------------
-// Official ACZ Mod Loader 1.2 Add-on Entry Point (Called by version.dll)
+// ASI & Add-on Entry Points (Called by version.dll ASI Loader)
 // ----------------------------------------------------------------------------
 extern "C" __declspec(dllexport) void __fastcall AczAddonInit(const AczAddonApi* api) {
     InitializeEnhancerPlugin(api);
 }
 
+extern "C" __declspec(dllexport) void __cdecl InitializeASI() {
+    InitializeEnhancerPlugin(nullptr);
+}
+
 // ----------------------------------------------------------------------------
-// DLL Entry Point (Fallback when loaded without version.dll)
+// DLL Entry Point
 // ----------------------------------------------------------------------------
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     (void)lpReserved;
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         g_SelfModule = hModule;
         DisableThreadLibraryCalls(hModule);
-        if (GetModuleHandleA("version.dll") == nullptr) {
-            InitializeEnhancerPlugin(nullptr);
-        }
     } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
         LogMsg("[Enhancer] Shutting down.");
         if (g_FallbackLogFile != nullptr) {

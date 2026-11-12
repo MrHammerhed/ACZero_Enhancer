@@ -1,8 +1,8 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — Universal HD Texture Replacer
-// File: acz_hdtex.cpp (v0.23.5 — Built-In Native C++ Texture Pack Auto-Installer, Live Controller/Keyboard Auto-Detect & DDS Cache Engine)
-// Build: Visual Studio 2026 x64 (Release) -> acz_hdtex.dll
-// Usage: Place acz_hdtex.dll into "<GameDir>\mods\acz_hdtex.dll"
+// File: acz_hdtex.cpp (v0.23.6 — Built-In Native C++ Texture Pack Auto-Installer, Live Controller/Keyboard Auto-Detect & DDS Cache Engine)
+// Build: Visual Studio 2026 x64 (Release) -> acz_hdtex.asi
+// Usage: Place acz_hdtex.asi into "<GameDir>\mods\enhancer\acz_hdtex.asi" (loaded by version.dll)
 //        Configuration is stored in "<GameDir>\mods\enhancer\acz_hdtex.ini"
 //        Place replacement PNGs (or MASTER_<LANG>_font_32x32.png + .txt) into "<GameDir>\mods\textures\"
 //        Note: Widescreen HUD/menus & controller input (enhancer.dll) and memory dumping (memdump.dll) are separate independent modules.
@@ -39,7 +39,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* PLUGIN_VERSION_STR = "v0.23.5";
+static constexpr const char* PLUGIN_VERSION_STR = "v0.23.6";
 static constexpr uint16_t    CUSTOM_EXTRATEX_TAG = 0x7FFF;
 static constexpr uint32_t    MAX_CUSTOM_TEXTURES = 65535;
 static constexpr uint64_t    FNV1A_64_OFFSET     = 0xCBF29CE484222325ULL;
@@ -4011,7 +4011,7 @@ static void LoadConfigIni() {
                 "; Ace Combat Zero — HD Texture & Font Replacer Configuration (%s)\n"
                 "; Note: Memory dumper and QoL settings are located in mods\\QoL\\memdump.ini\n"
                 "\n"
-                "; EnableLogging: Write [ACZ_HDTex] events directly into modloader.log\n"
+                "; EnableLogging: Write [ACZ_HDTex] events directly into mods\\enhancer\\enhancer.log\n"
                 "EnableLogging=1\n"
                 "\n"
                 "; DumpAllGims: Dump loaded textures (into mods\\textures_dump\\) and font atlases\n"
@@ -9260,7 +9260,7 @@ static void InitializePlugin(const AczAddonApi* api) {
     }
 
     if (g_EnableLogging && g_ModLoaderLogFn == nullptr) {
-        fs::path modloader_log_path = g_GameDir / "modloader.log";
+        fs::path modloader_log_path = g_ModsDir / "enhancer" / "enhancer.log";
         g_FallbackLogFile = _fsopen(modloader_log_path.string().c_str(), "a", _SH_DENYNO);
     }
 
@@ -9407,10 +9407,14 @@ static void InitializePlugin(const AczAddonApi* api) {
 }
 
 // ----------------------------------------------------------------------------
-// Official ACZ Mod Loader 1.2 Add-on Entry Point (Called by version.dll)
+// ASI & Add-on Entry Points (Called by version.dll ASI Loader)
 // ----------------------------------------------------------------------------
 extern "C" __declspec(dllexport) void __fastcall AczAddonInit(const AczAddonApi* api) {
     InitializePlugin(api);
+}
+
+extern "C" __declspec(dllexport) void __cdecl InitializeASI() {
+    InitializePlugin(nullptr);
 }
 
 // ----------------------------------------------------------------------------
@@ -9421,9 +9425,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         g_SelfModule = hModule;
         DisableThreadLibraryCalls(hModule);
-        if (GetModuleHandleA("version.dll") == nullptr) {
-            InitializePlugin(nullptr);
-        }
     } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
         LogMsg("[ACZ_HDTex] Shutting down.");
         if (g_FallbackLogFile != nullptr) {

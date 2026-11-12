@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ============================================================================
-echo  ACZero Enhancer (v0.23.5) — Visual Studio 2026 / 2022 One-Click Build Script
-echo  Targets: enhancer.dll (v0.23.5), acz_hdtex.dll (v0.23.5), memdump.dll (v0.16.3)
+echo  ACZero Enhancer (v0.23.6) — Visual Studio 2026 / 2022 One-Click Build Script
+echo  Targets: version.dll (v0.1), enhancer.asi (v0.23.6), acz_hdtex.asi (v0.23.6), memdump.asi (v0.16.5)
 echo ============================================================================
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -34,30 +34,38 @@ echo [*] Initializing x64 C++ Build Environment: "%VCVARS%"
 call "%VCVARS%" >nul
 if not exist "%~dp0build" mkdir "%~dp0build"
 if not exist "%~dp0mods" mkdir "%~dp0mods"
+if not exist "%~dp0mods\enhancer" mkdir "%~dp0mods\enhancer"
+
+if exist "%~dp0version_loader.cpp" (
+    echo [*] Building version.dll ^(v0.1^)...
+    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0version_loader.cpp" /Fe:"%~dp0build\version.dll" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
+    if errorlevel 1 goto :err
+    copy /y "%~dp0build\version.dll" "%~dp0version.dll" >nul
+)
 
 if exist "%~dp0enhancer.cpp" (
-    echo [*] Building enhancer.dll ^(v0.23.5^)...
-    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.dll" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
+    echo [*] Building enhancer.asi ^(v0.23.6^)...
+    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.asi" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
-    copy /y "%~dp0build\enhancer.dll" "%~dp0mods\enhancer.dll" >nul
+    copy /y "%~dp0build\enhancer.asi" "%~dp0mods\enhancer\enhancer.asi" >nul
 )
 
 if exist "%~dp0memdump.cpp" (
-    echo [*] Building memdump.dll ^(v0.16.3^)...
-    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0memdump.cpp" /Fe:"%~dp0build\memdump.dll" /Fo:"%~dp0build\\" user32.lib ole32.lib windowscodecs.lib psapi.lib /link /OPT:REF /OPT:ICF
+    echo [*] Building memdump.asi ^(v0.16.5^)...
+    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0memdump.cpp" /Fe:"%~dp0build\memdump.asi" /Fo:"%~dp0build\\" user32.lib ole32.lib windowscodecs.lib psapi.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
-    copy /y "%~dp0build\memdump.dll" "%~dp0mods\memdump.dll" >nul
+    copy /y "%~dp0build\memdump.asi" "%~dp0mods\enhancer\memdump.asi" >nul
 )
 
 if exist "%~dp0acz_hdtex.cpp" (
-    echo [*] Building acz_hdtex.dll ^(v0.23.5^)...
-    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0acz_hdtex.cpp" /Fe:"%~dp0build\acz_hdtex.dll" /Fo:"%~dp0build\\" user32.lib ole32.lib windowscodecs.lib /link /OPT:REF /OPT:ICF
+    echo [*] Building acz_hdtex.asi ^(v0.23.6^)...
+    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0acz_hdtex.cpp" /Fe:"%~dp0build\acz_hdtex.asi" /Fo:"%~dp0build\\" user32.lib ole32.lib windowscodecs.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
-    copy /y "%~dp0build\acz_hdtex.dll" "%~dp0mods\acz_hdtex.dll" >nul
+    copy /y "%~dp0build\acz_hdtex.asi" "%~dp0mods\enhancer\acz_hdtex.asi" >nul
 )
 
 echo ============================================================================
-echo  [SUCCESS] All available ACZero Enhancer DLL targets built and copied to mods\!
+echo  [SUCCESS] Built version.dll and all mods\enhancer\*.asi targets!
 echo ============================================================================
 pause
 exit /b 0

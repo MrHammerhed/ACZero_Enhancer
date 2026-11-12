@@ -1,17 +1,19 @@
-# ACZero Enhancer (v0.23.5) — Project Changelog and File Registry
+# ACZero Enhancer (v0.23.6) — Project Changelog and File Registry
 
 This document provides a registry of all modules, plugins, and tools for the **ACZero Enhancer** project for the standalone PC port of *Ace Combat Zero: The Belkan War*, along with the version history for each file.
 
 ## 1. Architecture and Component Overview
 
-All DLL plugins located in the `mods\` directory are automatically loaded by the **`version.dll` (v1.2)** modloader via the `AczAddonInit` export. All plugins operate **completely independently of each other** (any plugin can be used standalone or in any combination).
+All ASI plugins located in the `mods\enhancer\` directory are automatically loaded by the custom **`version.dll` (v0.1)** ASI loader (`version_loader.cpp`) via `AczAddonInit` / `InitializeASI`, writing unified logs to `mods\enhancer\enhancer.log`. All plugins operate **completely independently of each other** (any plugin can be used standalone or in any combination).
 
 | File | Current Version | Build Target (VS 2026 / 2022) | Configuration / Directory | Purpose |
 | ----- | ----- | ----- | ----- | ----- |
-| **`acz_version_map.h`** | **v0.21.1** | C++17 Header | Included in all DLLs | Automatic runtime version detection and piecewise RVA / RIP-disp32 mapping between `acz.exe` **v1.0.2.1** and **v2.0.0.1** (documented in `docs/VERSION_MAP.md`). |
-| **`enhancer.cpp`** | **v0.23.5** | C++17 DLL (`mods\enhancer.dll`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input & frame-pacing engine: 60 FPS frame-pacing unlocker, D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
-| **`acz_hdtex.cpp`** + **`acz_tex_installer.h`** | **v0.23.5** | C++17 DLL (`mods\acz_hdtex.dll`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`), built-in native C++ texture pack auto-installer & OstrichMods converter, native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
-| **`memdump.cpp`** | **v0.16.3** | C++17 DLL (`mods\memdump.dll`) | `mods\enhancer\memdump.ini`, `mods\memory_dumps\` | Independent diagnostic memory & state dumper (`F2` in-game hotkey, crash and exit hooks, on-demand pre-`Present` D3D12 `screenshot.png` capture, `acz_process.dmp` minidumps, auto-cleanup of old dumps, sibling module state queries). |
+| **`version_loader.cpp`** | **v0.1** | C++17 DLL (`version.dll`) | `mods\enhancer\enhancer.log` | Native `version.dll` proxy & ASI loader: hooks `acz.exe` `.text` startup after SteamStub unpacking, loads `mods\enhancer\*.asi`, writes unified `enhancer.log`, and chains `version_orig.dll` if present. |
+| **`acz_version_map.h`** | **v0.21.1** | C++17 Header | Included in all ASIs | Automatic runtime version detection and piecewise RVA / RIP-disp32 mapping between `acz.exe` **v1.0.2.1** and **v2.0.0.1** (documented in `docs/VERSION_MAP.md`). |
+| **`enhancer.cpp`** | **v0.23.6** | C++17 ASI (`mods\enhancer\enhancer.asi`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input & frame-pacing engine: 60 FPS frame-pacing unlocker, D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
+| **`acz_hdtex.cpp`** | **v0.23.6** | C++17 ASI (`mods\enhancer\acz_hdtex.asi`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`), built-in native C++ texture pack auto-installer (`acz_tex_installer.h`), native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
+| **`acz_tex_installer.h`** | **v1.0** | C++17 Header | Included in `acz_hdtex.cpp` | Zero-dependency native C++ ZIP extractor, WIC PNG resizer, PS2 alpha scaler, weapon atlas builder, and master font compiler replacing `ACZ_Textures_installer.bat`. |
+| **`memdump.cpp`** | **v0.16.5** | C++17 ASI (`mods\enhancer\memdump.asi`) | `mods\enhancer\memdump.ini`, `mods\memory_dumps\` | Independent diagnostic memory & state dumper (`F2` in-game hotkey, crash and exit hooks, on-demand pre-`Present` D3D12 `screenshot.png` capture, `acz_process.dmp` minidumps, auto-cleanup of old dumps, sibling module state queries). |
 | **`py\ACZ_Resource_Scanner.py`** | **v9** | Python Tool | `py\` | Global scanner for extracted game archives (`a.arc`, `d.arc`) and builder for unified language master font atlases (`MASTER_<LANG>_font_*.png`). |
 | **`py\ACZ_TIM2_Scanner.py`** | **v1** | Python Tool | `py\` | Universal `TIM2` scanner and converter for `.swa` (`SWAD`), `.fhm`, `.msa`, `.bin`, and `.tm2` containers to `PNG` + `.json` with triple-hash support. |
 | **`py\ACZ_FHM_Converter.py`** | **v5** | Python Tool | `py\` | Container unpacker/packer for `.FHM`, font metric tables, and dynamic `*Pmenu.fhm` fonts with batch export mode for `acz_hdtex.dll`. |
@@ -21,7 +23,7 @@ All DLL plugins located in the `mods\` directory are automatically loaded by the
 
 ## 2. Component Changelogs
 
-### 2.1. `enhancer.cpp` (`mods\enhancer.dll`) — Current Version: **v0.23.5**
+### 2.1. `enhancer.cpp` (`mods\enhancer\enhancer.asi`) — Current Version: **v0.23.6**
 
 Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, subtitles, and 3D FOV), controller input engine, and 60 FPS frame-pacing plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\enhancer.ini`. Operates fully standalone or in synergy with `acz_hdtex.dll`.
 
@@ -83,11 +85,17 @@ Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, 
 
   * **Expanded Main Engine Heap & Per-Frame 3D GIF DMA Stream Buffer (`RVA +0x1FF35C`..`+0x1FF456`):** Expanded the main engine heap (`64 MB -> 128 MB`) and the double-buffered per-frame 3D GIF DMA packet stream buffer (`2 MB -> 8 MB` total, `1 MB -> 4 MB` per frame) to prevent DMA buffer overflow into the adjacent GS display context `*(0x14032c8b8)` (`0xC0000005` at `RVA +0x1FFA2D`).
 
-* **v0.23.5 (Save-Safe `ScreenAspect` Persistence & Widescreen Menu Scrollbar Thumb Alignment):**
+* **v0.23.5 (Save-Safe `ScreenAspect` Persistence & Widescreen Menu Scrollbar Thumb Alignment, Texture Pack Auto-Installer Release Alignment):**
 
   * **Save-Safe Aspect Ratio Persistence (`[Widescreen] ScreenAspect = 0 | 1 | 2` in `enhancer.ini`):** Hooks `SwgOptionSetAspect` (`RVA +0x1F3850`), `CSysData::Save` (`RVA +0x1895B0`), and `CSysData::Load` (`RVA +0x1895E0`) so the save file on disk always stores vanilla-compatible `16:9` (`1`) while the active runtime aspect ratio (`0 = 4:3`, `1 = 16:9`, `2 = 21:9`) is persisted in `enhancer.ini` and synchronized every frame in `SyncSwgInstanceAspect`.
+  
+  * Synchronized release versioning with `acz_hdtex` v0.23.5 (`acz_tex_installer.h` integration).
 
-### 2.2. `acz_hdtex.cpp` (`mods\acz_hdtex.dll`) — Current Version: **v0.23.5**
+* **v0.23.6 (Custom `version.dll` ASI Loader & Shared `mods\enhancer\enhancer.log`):**
+
+  * Migrated build target to `mods\enhancer\enhancer.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader, unified logging into `mods\enhancer\enhancer.log`, and added sibling detection for `mods\enhancer\acz_hdtex.asi`.
+
+### 2.2. `acz_hdtex.cpp` (`mods\enhancer\acz_hdtex.asi`) — Current Version: **v0.23.6**
 
 Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\acz_hdtex.ini`, replacement textures are loaded from `mods\textures\`. Operates fully standalone or in synergy with `enhancer.dll`.
 
@@ -183,7 +191,11 @@ Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2
 
   * **Fixed `4:3` Base Texture Tier Caching (`GetOrLoadCustomTexForTier`):** Fixed a bug where switching to `4:3` (`eff_tier == 0`) after loading `16:9` or `21:9` menu textures did not update `g_SlotLoadedTexTier[0][id]`, causing `4:3` menus to reuse cached widescreen scrollbar frames.
 
-### 2.3. `memdump.cpp` (`mods\memdump.dll`) — Current Version: **v0.16.3**
+* **v0.23.6 (Custom `version.dll` ASI Loader & Shared `mods\enhancer\enhancer.log`):**
+
+  * Migrated build target to `mods\enhancer\acz_hdtex.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader and unified logging into `mods\enhancer\enhancer.log`.
+
+### 2.3. `memdump.cpp` (`mods\enhancer\memdump.asi`) — Current Version: **v0.16.5**
 
 Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer capture plugin. Configuration is stored in `mods\enhancer\memdump.ini`, dumps are saved to `mods\memory_dumps\`.
 
@@ -235,7 +247,25 @@ Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer captur
 
   * Synchronized dual-version RVA mapping thresholds (`0x002CEEF0` `.rdata` table alignment and `0x00324600` `BSS` globals threshold) with `acz_version_map.h`.
 
-### 2.4. `acz_tex_installer.h` (Formerly `ACZ_Textures_installer.bat` v8.1) — Built-In C++ Auto-Installer
+* **v0.16.4 (Release Alignment with v0.23.5):**
+
+  * Synchronized module version alongside the v0.23.5 release.
+
+* **v0.16.5 (Custom `version.dll` ASI Loader & Shared `mods\enhancer\enhancer.log`):**
+
+  * Migrated build target to `mods\enhancer\memdump.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader, updated sibling runtime bridges to query `enhancer.asi` and `acz_hdtex.asi`, and unified logging into `mods\enhancer\enhancer.log`.
+
+### 2.4. `version_loader.cpp` (`version.dll`) — Current Version: **v0.1**
+
+Custom native `version.dll` proxy and ASI plugin loader for `acz.exe`.
+
+* **v0.1 (Initial Release):**
+
+  * Implements all 17 standard `version.dll` proxy exports forwarding to `System32\version.dll`.
+
+  * Hooks `kernel32.dll` startup IAT slots (`GetSystemTimeAsFileTime`, `GetModuleFileNameA`) with `.text` section return-address verification after SteamStub unpacking, loads all `*.asi` plugins from `mods\enhancer\` in priority order (`memdump.asi`, `enhancer.asi`, `acz_hdtex.asi`), writes unified logs to `mods\enhancer\enhancer.log`, and optionally chains a renamed legacy loader (`version_orig.dll`, `version_original.dll`, or `modloader.dll`).
+
+### 2.5. `ACZ_Textures_installer.bat` — Legacy / Superseded by `acz_tex_installer.h` (v8.1)
 
 Native C++ port of the OstrichMods HUD pack (`actrilogy-hud-upgrade-v1.2.1.zip`) and `custom textures.zip` installer embedded directly into `acz_hdtex.dll` (replacing the standalone `.bat` script).
 
@@ -247,7 +277,7 @@ Native C++ port of the OstrichMods HUD pack (`actrilogy-hud-upgrade-v1.2.1.zip`)
 
 * **v8 – v8.1:** Full support for `custom textures.zip` (processing `For OstrichMods\` and deploying `textures\` to `mods\textures\`), integration of 38 squadron intro glyphs (`#601..#638`), generation of `subtitle_brackets_BB10DED7AB6393C6.png`, optimized PNG compression (`compress_level=4`), and Zero-Install Portable Python Mode.
 
-### 2.5. Python Utility Suite (`py\`)
+### 2.6. Python Utility Suite (`py\`)
 
 * **`py\ACZ_Resource_Scanner.py` (v9):** Scans extracted `.arc` / `.fhm` containers, clusters font families (`FAMILY_*`), merges language slots (`1us` / `2uk` into `EN`), and builds unified master atlases (`MASTER_*`) with standard baseline alignment (`std_h`).
 

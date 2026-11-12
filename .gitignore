@@ -19,6 +19,8 @@ Release/
 mods/memory_dumps/
 mods/textures_dump/
 mods/textures/
+mods/enhancer/*.asi
+version.dll
 *.dmp
 
 # Python bytecode & virtual environments

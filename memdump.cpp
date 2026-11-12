@@ -1,8 +1,8 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Diagnostic Memory Dumper
-// File: memdump.cpp (v0.16.3 — On-Demand D3D12 Backbuffer Readback, Fence Sync, Dual-Version Support, F2 Hotkey & Crash Handler)
-// Build: Visual Studio 2026 x64 (Release) -> memdump.dll
-// Usage: Place memdump.dll into "<GameDir>\mods\memdump.dll" (loaded by version.dll 1.2)
+// File: memdump.cpp (v0.16.5 — Native ASI Plugin Support, Shared mods\enhancer\enhancer.log, On-Demand D3D12 Readback & Crash Handler)
+// Build: Visual Studio 2026 x64 (Release) -> memdump.asi
+// Usage: Place memdump.asi into "<GameDir>\mods\enhancer\memdump.asi" (loaded by version.dll)
 //        Configuration is stored in "<GameDir>\mods\enhancer\memdump.ini"
 //        Dumps and screenshots are written to "<GameDir>\mods\memory_dumps\"
 //        Operates 100% independently of enhancer.dll and acz_hdtex.dll (automatically
@@ -40,7 +40,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.3";
+static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.5";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -1020,10 +1020,10 @@ static void LoadMemDumpConfigIni() {
             fprintf(f,
                 "; ============================================================================\n"
                 "; Ace Combat Zero: The Belkan War — Diagnostic Memory Dumper Configuration (%s)\n"
-                "; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Used by: mods\\memdump.dll\n"
+                "; Path: <GameDir>\\mods\\enhancer\\memdump.ini\n; Used by: mods\\enhancer\\memdump.asi\n"
                 "; ============================================================================\n\n"
                 "[MemoryDump]\n"
-                "; EnableLogging: Write [MemDump] events directly into modloader.log\n"
+                "; EnableLogging: Write [MemDump] events directly into mods\\enhancer\\enhancer.log\n"
                 "EnableLogging=1\n\n"
                 "; EnableMemoryDump: Master switch for diagnostic memory dumps in mods\\memory_dumps\\\n"
                 "EnableMemoryDump=1\n\n"
@@ -1280,8 +1280,9 @@ static void PerformFullMemoryAndStateDump(
         fclose(rf);
     }
 
-    // Optional Runtime Bridge 1: Query enhancer.dll if loaded in the process
-    HMODULE hEnhancer = GetModuleHandleA("enhancer.dll");
+    // Optional Runtime Bridge 1: Query enhancer.asi / enhancer.dll if loaded in the process
+    HMODULE hEnhancer = GetModuleHandleA("enhancer.asi");
+    if (!hEnhancer) hEnhancer = GetModuleHandleA("enhancer.dll");
     bool enhancer_bridged = false;
     if (hEnhancer != nullptr) {
         auto fnEnhSummary = reinterpret_cast<FnAczEnhancerWriteSummary>(
@@ -1293,8 +1294,9 @@ static void PerformFullMemoryAndStateDump(
         }
     }
 
-    // Optional Runtime Bridge 2: Query acz_hdtex.dll if loaded in the process
-    HMODULE hHdTex = GetModuleHandleA("acz_hdtex.dll");
+    // Optional Runtime Bridge 2: Query acz_hdtex.asi / acz_hdtex.dll if loaded in the process
+    HMODULE hHdTex = GetModuleHandleA("acz_hdtex.asi");
+    if (!hHdTex) hHdTex = GetModuleHandleA("acz_hdtex.dll");
     bool hdtex_bridged = false;
     if (hHdTex != nullptr) {
         auto fnDumpBridge = reinterpret_cast<FnAczHdTexDumpLiveState>(
@@ -1449,7 +1451,7 @@ static void InitializeMemDumpPlugin(const AczAddonApi* api) {
     LoadMemDumpConfigIni();
 
     if (g_EnableLogging && g_ModLoaderLogFn == nullptr) {
-        fs::path modloader_log_path = g_GameDir / "modloader.log";
+        fs::path modloader_log_path = g_MemDumpDir / "enhancer.log";
         g_FallbackLogFile = _fsopen(modloader_log_path.string().c_str(), "a", _SH_DENYNO);
     }
 
@@ -1520,22 +1522,23 @@ static void InitializeMemDumpPlugin(const AczAddonApi* api) {
 }
 
 // ----------------------------------------------------------------------------
-// Official ACZ Mod Loader 1.2 Add-on Entry Point (Called by version.dll)
+// ASI & Add-on Entry Points (Called by version.dll ASI Loader)
 // ----------------------------------------------------------------------------
 extern "C" __declspec(dllexport) void __fastcall AczAddonInit(const AczAddonApi* api) {
     InitializeMemDumpPlugin(api);
 }
 
+extern "C" __declspec(dllexport) void __cdecl InitializeASI() {
+    InitializeMemDumpPlugin(nullptr);
+}
+
 // ----------------------------------------------------------------------------
-// DLL Entry Point (Fallback when loaded without version.dll)
+// DLL Entry Point
 // ----------------------------------------------------------------------------
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         g_SelfModule = hModule;
         DisableThreadLibraryCalls(hModule);
-        if (GetModuleHandleA("version.dll") == nullptr) {
-            InitializeMemDumpPlugin(nullptr);
-        }
     } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
         g_ShuttingDown.store(true, std::memory_order_release);
 
