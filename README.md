@@ -1,4 +1,4 @@
-# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.23.6)
+# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.24)
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](https://microsoft.com/windows)
@@ -32,7 +32,12 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ## Key Components
 
-### 1. `enhancer.asi` — Widescreen 16:9/21:9, HUD, Subtitles, Input & 60 FPS Engine (v0.23.6)
+### 1. `enhancer.asi` — Widescreen 16:9/21:9, HUD, Subtitles, Input, FastStartup & 60 FPS Engine (v0.24)
+* **Configurable Multi-Stage Fast Startup (`FastStartup = 0 | 1 | 2 | 3` in `enhancer.ini`, default `0`)**:
+  * `0` — Disabled (vanilla startup).
+  * `1` — Bypasses the native launcher (`e.arc` / dialog) and controller manual screen (`CModePadManual`), and lets you press any gamepad or keyboard button during intro logos (`CModeWakeLogo`) to jump straight to the Title Screen (`CModeTitle`).
+  * `2` — Level 1 + removes the 2×30-frame artificial Memory Card UI delays (`CSelectMemorycard`) and automatically skips intro logos directly to the Title Screen (`CModeTitle`).
+  * `3` — Level 2 + automatically skips both intro logos and the Title Screen directly into the Main Menu (`CModeMainSelect`).
 * **Full 16:9 & 21:9 Widescreen Custom Menu Engine**: Dynamically loads 16:9 and 21:9 custom menu layouts (`<menu>_16x9.swa`, `<menu>_21x9.swa`) across all 31 in-game menus with 9-slice frame scaling, edge-to-edge coverage, 21:9 `Display Settings` option (`OptionSetAspect=2`) with save persistence, and aspect-correct briefing/cutscene video playback.
 * **Hor+ 21:9 3D FOV & Gameplay HUD Adaptation**: True Hor+ 3D camera FOV in 21:9 mode, unstretched 1:1 3D reticles/target boxes/compass, corner-anchored `SCORE`/`TIME`/target lists (plus 3rd-person `SPEED`/`ALT` corner anchoring), compact target labels, full-width debriefing tactical map, and uniform 12.4 subpixel X-scaling for radio/cutscene subtitles, mission title cards, and loading screen quotes.
 * **DirectInput / XInput Controller & Keyboard Input Fixes**:
@@ -40,8 +45,9 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
   * Seamless single-player input merging (`Unlock2PlayerCampaign=0` by default) or split 2-Player Co-Op / VS Mode (`Unlock2PlayerCampaign=1`, where Player 1 is controlled by Gamepad and Player 2 independently by Keyboard).
 * **60 FPS Frame-Pacing Unlocker & Memory Pool Expansion**: Disables the broken 30.0 FPS catch-up trap (`RVA +0x20BCAF`) and expands the main engine heap (`128 MB`), per-frame 3D GIF DMA stream buffer (`8 MB`), and D3D12 texture/upload pools.
 
-### 2. `acz_hdtex.asi` — HD Texture, Font, DDS Cache & Glyph Engine (v0.23.6)
-* **Autonomous BC7 / BGRA8 `.dds_cache` Engine & Direct D3D12 Replacement**: Compiles replacement PNGs to `BC7 Mode 6` and `BGRA8` `.dds_cache` files on the fly with Display P3 -> sRGB color normalization, loading HD textures directly into D3D12 with zero runtime PNG decode overhead.
+### 2. `acz_hdtex.asi` — HD Texture, Terrain, Font, DDS Cache & Glyph Engine (v0.24)
+* **4x HD Terrain & Map Retexturing (`256x256x1024` BC7 `Texture2DArray`)**: Intercepts native `64x64x1024` map tile uploads (`Hook_UploadTerrainTextureArray`), replaces matched tiles from `mods\textures\terrain\` (`.png`, `.jpg`, `.jpeg`) in parallel across up to 8 worker threads, leverages `.dds_cache` for instant subsequent map loads, and automatically preserves stock water alpha masks (see [`docs/TERRAIN_RETEXTURE_ARCHITECTURE.md`](docs/TERRAIN_RETEXTURE_ARCHITECTURE.md)).
+* **Autonomous BC7 / BGRA8 `.dds_cache` Engine & Direct D3D12 Replacement**: Compiles replacement textures to `BC7 Mode 6` and `BGRA8` `.dds_cache` files on the fly with Display P3 -> sRGB color normalization, loading HD textures directly into D3D12 with zero runtime PNG/JPEG decode overhead.
 * **Live Controller & Keyboard Glyph Auto-Switching (`GamepadGlyphs = AUTO | PS | XBOX | KB`)**: Automatically detects active input across PlayStation, Xbox, and Keyboard every frame and swaps all menu/HUD button prompts (`pads/`).
 * **Unified Master Font Atlases**: Replaces dynamic in-game fonts (`GameFont`) with high-resolution master font atlases (`MASTER_EN_font_32x32.png`, `MASTER_EN_font_64x64.png`), complete with per-glyph core centering, standard baseline height (`std_h`) alignment, and automatic subtitle bracket generation.
 * **Lock-Free Render Thread & TIM2/SWAD Support**: Uses a 512-Kbit Bloom filter and a 64K lock-free hash table to replace `GIM`, `FHM`, and `.swa` (`SWAD`) `TIM2` textures with zero stutter, including `_16x9.png` and `_21x9.png` aspect-ratio variants.
@@ -61,13 +67,14 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 * **`ACZ_FHM_Converter.py` (v5)**: Recursively unpacks and repacks `.FHM` archives and metric tables.
 * **`ACZ_GIM_PNG_Converter.py` (v5)**: Two-way converter for 4-bit (`PSMT4`) and 8-bit (`PSMT8`) `.gim` files with `FNV-1a` 64-bit hashing.
 * **`ACZ_SWAD_Converter.py` (v1)** & **`ACZ_SWG_Visual_Editor.py` (v1)**: Unpacker/packer, automated 16:9/21:9 menu layout generator, and interactive WYSIWYG visual editor for `.swa` / `.swg` menu archives.
+* **`ACZ_Terrain_Converter.py` (v1.0)**: Exports seamless context-padded `512x512` terrain sheets from `mXX.mtd`/`.mtc`/`.mti`/`.mta` containers for `4x` AI upscaling (`2048x2048`) and slices them back into `256x256` FNV-1a hashed tiles for `acz_hdtex.asi`.
 
 ---
 
 ## Installation Guide
 
 ### Step 1: Install ACZero Enhancer (`version.dll` + `mods\enhancer\*.asi`)
-* Download the latest release (`ACZero_Enhancer_v0.23.6_Release.zip`) from [Releases](../../releases).
+* Download the latest release (`ACZero_Enhancer_v0.24_Release.zip`) from [Releases](../../releases).
 * Extract `version.dll` and the `mods\` folder directly into your game root directory (next to `acz.exe`).
 * *(Optional)* If you also use the legacy `version.dll` (`ACE COMBAT ZERO mod loader 1.2`) for `.arc` mods, simply rename the old `version.dll` to `version_orig.dll` next to `acz.exe`.
 
@@ -86,7 +93,7 @@ Creating high-definition textures is an extremely labor-intensive process. Below
 * **User Interface (HUD / UI)**: ~90%.
 * **In-Game Fonts & Subtitles**: ~90% complete (unified master font atlases, baseline alignment, subtitle brackets).
 * **Aircraft Textures & Liveries**: 0%
-* **Terrain & Landmass Textures**: TBD
+* **Terrain & Landmass Textures**: ~25% (Stage 1 complete: `18` maps upscaled to `256x256` 4x HD tiles — these will serve as **distant terrain textures** in the final pipeline, while close-range terrain will be replaced with **PBR materials** via a custom D3D12 terrain shader; see [`docs/MAP_EDITOR_ROADMAP.md`](docs/MAP_EDITOR_ROADMAP.md) and [`docs/KNOWN_VANILLA_ISSUES.md`](docs/KNOWN_VANILLA_ISSUES.md)).
 * **Map Objects & Buildings**: TBD
 * **VFX & Particle Effects**: 0%
 
@@ -109,7 +116,7 @@ If you want to contribute HD textures, report replacement bugs, or help with C++
 The following features and expansions are planned for future development:
 * **Extended Render Distance**: Increasing camera clip planes, terrain LOD thresholds, and fog distances.
 * **DualSense Controller Support**: Native haptic feedback and adaptive trigger effects.
-* **Quality-of-Life (QoL) Patches**: Intro skip, HUD options, and control enhancements.
+* **Quality-of-Life (QoL) Patches**: Additional HUD options, control enhancements, and exiting the game from the Main Menu by holding both sticks (`L3 + R3`) with a confirmation dialog.
 * **Graphical Settings Manager**: Standalone GUI configurator for tuning graphics, texture options, and patches.
 * **Extended UI Elements**: Talking character radio portraits (similar to modern installments) and High-G turn indicator banners (similar to Ace Combat 6) for another mod?
 * **Custom Aircraft & High-Poly Models**: Importing custom 3D aircraft meshes and high-polygon models?
@@ -142,7 +149,7 @@ Open `ACZero_Enhancer.sln` in Visual Studio, select the **Release | x64** config
 
 * **Mr.Hammerhed**: Project Lead, Ideologist, Creator, and Primary Tester.
 * **Edelweiß**: Key contributor who made the project possible, Assistant.
-* **Argon4.0 / Gemini 3.8**: AI TOOL assistant utilized for game code decompilation and reverse engineering analysis.
+* **Argon 4.0 / Neon 4.0**: AI TOOL assistant utilized for game code decompilation and reverse engineering analysis.
 * **OstrichMods**: Original HUD Upgrade assets.
 * **Bandai Namco Entertainment & Project Aces**: Original creators and copyright holders of *Ace Combat Zero: The Belkan War*.
 

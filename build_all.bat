@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ============================================================================
-echo  ACZero Enhancer (v0.23.6) — Visual Studio 2026 / 2022 One-Click Build Script
-echo  Targets: version.dll (v0.1), enhancer.asi (v0.23.6), acz_hdtex.asi (v0.23.6), memdump.asi (v0.16.5)
+echo  ACZero Enhancer (v0.24) — Visual Studio 2026 / 2022 One-Click Build Script
+echo  Targets: version.dll (v0.1), enhancer.asi (v0.24), acz_hdtex.asi (v0.23.6), memdump.asi (v0.16.5)
 echo ============================================================================
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -26,7 +26,7 @@ if "%VCVARS%"=="" (
 
 if "%VCVARS%"=="" (
     echo [ERROR] Could not locate Visual Studio 2026 / 2022 C++ Build Tools ^(vcvars64.bat^).
-    pause
+    if /i "%comspec% /c ""%~f0"" "=="%cmdcmdline%" pause
     exit /b 1
 )
 
@@ -44,7 +44,7 @@ if exist "%~dp0version_loader.cpp" (
 )
 
 if exist "%~dp0enhancer.cpp" (
-    echo [*] Building enhancer.asi ^(v0.23.6^)...
+    echo [*] Building enhancer.asi ^(v0.24^)...
     cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.asi" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
     copy /y "%~dp0build\enhancer.asi" "%~dp0mods\enhancer\enhancer.asi" >nul
@@ -67,10 +67,10 @@ if exist "%~dp0acz_hdtex.cpp" (
 echo ============================================================================
 echo  [SUCCESS] Built version.dll and all mods\enhancer\*.asi targets!
 echo ============================================================================
-pause
+if /i "%comspec% /c ""%~f0"" "=="%cmdcmdline%" pause
 exit /b 0
 
 :err
 echo [ERROR] Build failed!
-pause
+if /i "%comspec% /c ""%~f0"" "=="%cmdcmdline%" pause
 exit /b 1

@@ -1,4 +1,4 @@
-# ACZero Enhancer (v0.23.6) — Project Changelog and File Registry
+# ACZero Enhancer (v0.24) — Project Changelog and File Registry
 
 This document provides a registry of all modules, plugins, and tools for the **ACZero Enhancer** project for the standalone PC port of *Ace Combat Zero: The Belkan War*, along with the version history for each file.
 
@@ -10,8 +10,8 @@ All ASI plugins located in the `mods\enhancer\` directory are automatically load
 | ----- | ----- | ----- | ----- | ----- |
 | **`version_loader.cpp`** | **v0.1** | C++17 DLL (`version.dll`) | `mods\enhancer\enhancer.log` | Native `version.dll` proxy & ASI loader: hooks `acz.exe` `.text` startup after SteamStub unpacking, loads `mods\enhancer\*.asi`, writes unified `enhancer.log`, and chains `version_orig.dll` if present. |
 | **`acz_version_map.h`** | **v0.21.1** | C++17 Header | Included in all ASIs | Automatic runtime version detection and piecewise RVA / RIP-disp32 mapping between `acz.exe` **v1.0.2.1** and **v2.0.0.1** (documented in `docs/VERSION_MAP.md`). |
-| **`enhancer.cpp`** | **v0.23.6** | C++17 ASI (`mods\enhancer\enhancer.asi`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input & frame-pacing engine: 60 FPS frame-pacing unlocker, D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
-| **`acz_hdtex.cpp`** | **v0.23.6** | C++17 ASI (`mods\enhancer\acz_hdtex.asi`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`), built-in native C++ texture pack auto-installer (`acz_tex_installer.h`), native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
+| **`enhancer.cpp`** | **v0.24** | C++17 ASI (`mods\enhancer\enhancer.asi`) | `mods\enhancer\enhancer.ini` | Core widescreen, HUD, input, FastStartup & frame-pacing engine: 60 FPS frame-pacing unlocker, multi-stage `FastStartup=0..3` (launcher/pad manual bypass, Memory Card UI timer removal, press-to-skip/auto-skip intro logos to Title Screen or Main Menu), D3D12 texture/upload pool expansion, full 16:9/21:9 custom menus (`.swa`/`.swg`), gameplay HUD/radar calibration, cutscene/radio subtitles, Hor+ 21:9 3D FOV, DirectInput / XInput / Keyboard input fixes, and 2-Player Co-Op / VS Mode support. |
+| **`acz_hdtex.cpp`** | **v0.24** | C++17 ASI (`mods\enhancer\acz_hdtex.asi`) | `mods\enhancer\acz_hdtex.ini`, `mods\textures\` | HD texture, map terrain, and dynamic font replacement/dumping engine (`GIM`, `FHM`, `TIM2`/`SWAD`, `256x256x1024` BC7 terrain `Texture2DArray`), `.png`/`.jpg`/`.jpeg` support, built-in native C++ texture pack auto-installer (`acz_tex_installer.h`), native controller button glyph selector (`pads/`), multi-threaded `.dds_cache` engine (BC7 Mode 6 / BGRA8), font metrics, and unified language Master Font Atlases (`MASTER_*`). |
 | **`acz_tex_installer.h`** | **v1.0** | C++17 Header | Included in `acz_hdtex.cpp` | Zero-dependency native C++ ZIP extractor, WIC PNG resizer, PS2 alpha scaler, weapon atlas builder, and master font compiler replacing `ACZ_Textures_installer.bat`. |
 | **`memdump.cpp`** | **v0.16.5** | C++17 ASI (`mods\enhancer\memdump.asi`) | `mods\enhancer\memdump.ini`, `mods\memory_dumps\` | Independent diagnostic memory & state dumper (`F2` in-game hotkey, crash and exit hooks, on-demand pre-`Present` D3D12 `screenshot.png` capture, `acz_process.dmp` minidumps, auto-cleanup of old dumps, sibling module state queries). |
 | **`py\ACZ_Resource_Scanner.py`** | **v9** | Python Tool | `py\` | Global scanner for extracted game archives (`a.arc`, `d.arc`) and builder for unified language master font atlases (`MASTER_<LANG>_font_*.png`). |
@@ -20,10 +20,11 @@ All ASI plugins located in the `mods\enhancer\` directory are automatically load
 | **`py\ACZ_GIM_PNG_Converter.py`** | **v5** | Python Tool | `py\` | Direct two-way `GIM <-> PNG` converter (4-bit `PSMT4` and 8-bit `PSMT8`, `CSM1` palette descrambling, 32-bit RGBA, `FNV-1a` 64-bit hashing). |
 | **`py\ACZ_SWAD_Converter.py`** | **v1.0.1** | Python Tool | `py\` | Container unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives. |
 | **`py\ACZ_SWG_Visual_Editor.py`** | **v1** | Python Tool | `py\` | Interactive WYSIWYG GUI editor for `.swa` / `.swg` menu layouts, timelines, and matrix transformations (`4:3`, `16:9`, `21:9`). |
+| **`py\ACZ_Terrain_Converter.py`** | **v1.0** | Python Tool | `py\` | Seamless context-padded `512x512` terrain sheet exporter (`mXX.mtd`/`.mtc`/`.mti`/`.mta`) and `4x` HD tile slicer (`256x256` FNV-1a hashed tiles) for `acz_hdtex.asi`. |
 
 ## 2. Component Changelogs
 
-### 2.1. `enhancer.cpp` (`mods\enhancer\enhancer.asi`) — Current Version: **v0.23.6**
+### 2.1. `enhancer.cpp` (`mods\enhancer\enhancer.asi`) — Current Version: **v0.24**
 
 Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, subtitles, and 3D FOV), controller input engine, and 60 FPS frame-pacing plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\enhancer.ini`. Operates fully standalone or in synergy with `acz_hdtex.dll`.
 
@@ -95,7 +96,15 @@ Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, 
 
   * Migrated build target to `mods\enhancer\enhancer.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader, unified logging into `mods\enhancer\enhancer.log`, and added sibling detection for `mods\enhancer\acz_hdtex.asi`.
 
-### 2.2. `acz_hdtex.cpp` (`mods\enhancer\acz_hdtex.asi`) — Current Version: **v0.23.6**
+* **v0.24 (Multi-Stage `FastStartup` Engine & Press-to-Skip Intro Logos):**
+
+  * Ported and expanded `FastStartup` in `[Enhancer]` (`mods\enhancer\enhancer.ini`, default `0`) into four configurable stages (`0..3`) with full dual-version (`v1.0.2.1` & `v2.0.0.1`) RVA support:
+    * **`FastStartup=0` (Default):** Disabled (vanilla startup sequence).
+    * **`FastStartup=1`:** Bypasses the native launcher (`e.arc` mount & dialog) and controller manual screen (`CModePadManual` at `AczRva(0x16348B)`), and installs `Hook_CModeWakeLogoUpdate` (`AczRva(0x17DC30)`) so pressing any gamepad or keyboard button (`Enter` / `Space` / `Esc`) during intro logos cleanly transitions directly to the Title Screen (`CModeTitle`, `+0x1782B0`) with brief input suppression to prevent accidental auto-advance.
+    * **`FastStartup=2`:** Level 1 + removes the 2×30-frame (~1.0s) artificial Memory Card UI timers in `CSelectMemorycard` (`modeWake` at `AczRva(0x1C3000)` and `modeLoad` at `AczRva(0x1C2B27)`) and automatically redirects post-save boot (`AczRva(0x17D513)`) straight to the Title Screen (`CModeTitle`).
+    * **`FastStartup=3`:** Level 2 + automatically skips both intro logos and the Title Screen straight into the Main Menu (`CModeMainSelect`, `+0x178330`).
+
+### 2.2. `acz_hdtex.cpp` (`mods\enhancer\acz_hdtex.asi`) — Current Version: **v0.24**
 
 Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\acz_hdtex.ini`, replacement textures are loaded from `mods\textures\`. Operates fully standalone or in synergy with `enhancer.dll`.
 
@@ -195,6 +204,14 @@ Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2
 
   * Migrated build target to `mods\enhancer\acz_hdtex.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader and unified logging into `mods\enhancer\enhancer.log`.
 
+* **v0.24 (HD Terrain `Texture2DArray` Retexturing Engine & `.jpg`/`.jpeg` Support):**
+
+  * **Native Terrain `Texture2DArray` Hook (`Hook_UploadTerrainTextureArray`, `RVA +0x18E940` in `v1.0.2.1` / `+0x18EFC0` in `v2.0.0.1`):** Intercepts the engine's `64x64x1024` palettized terrain texture array upload (`g_TerrainTexArray[16]` at `+0x33BC50` / `+0x33EC70`), hashes all 1024 `4096`-byte tile index arrays via 64-bit `FNV-1a`, and upgrades matched maps to a **`256x256x1024` `BC7_UNORM`** D3D12 `Texture2DArray` (with automatic `128x128x1024` and stock `64x64` fallbacks if the D3D12 upload ring buffer slice is nearly full). This represents **Stage 1 (~25%)** of the terrain overhaul: these 4x HD tiles will serve as **distant terrain textures** in future updates, while close-range terrain will transition to **PBR materials** via a custom D3D12 terrain shader (see `docs/TERRAIN_RETEXTURE_ARCHITECTURE.md` and `docs/MAP_EDITOR_ROADMAP.md`).
+
+  * **Multi-Threaded Slice Assembly, Fast `.dds_cache` Path & Water Alpha Preservation:** Uses up to 8 worker threads to assemble all 1024 slices in parallel — reading pre-compiled `256x256` `BC7_UNORM` blocks directly from `.dds_cache` (`TryLoadFastDdsTerrainSlice`) for opaque tiles, decoding/encoding `.png`/`.jpg`/`.jpeg` via WIC + `BC7 Mode 6` (`TryEncodeHdPngTerrainSlice`), bilinearly preserving the stock `64x64` water alpha mask (`alpha < 0x80`) whenever an opaque HD tile replaces a water tile, and bilinearly upscaling unmatched stock tiles (`EncodeStockTerrainTileSlice` with solid-block fast path).
+
+  * **`.jpg` / `.jpeg` Texture Support:** Extended `ScanTexturesDirectory()` and WIC decoding to load `.jpg` and `.jpeg` replacement textures alongside `.png`, significantly reducing disk and archive footprint for large HD terrain packs (`mods\textures\terrain\`).
+
 ### 2.3. `memdump.cpp` (`mods\enhancer\memdump.asi`) — Current Version: **v0.16.5**
 
 Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer capture plugin. Configuration is stored in `mods\enhancer\memdump.ini`, dumps are saved to `mods\memory_dumps\`.
@@ -290,3 +307,5 @@ Native C++ port of the OstrichMods HUD pack (`actrilogy-hud-upgrade-v1.2.1.zip`)
 * **`py\ACZ_SWAD_Converter.py` (v1.0.1):** Unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives.
 
 * **`py\ACZ_SWG_Visual_Editor.py` (v1):** Interactive WYSIWYG GUI editor for `.swa` / `.swg` menu layouts, timelines, and matrix transformations (`4:3`, `16:9`, `21:9`).
+
+* **`py\ACZ_Terrain_Converter.py` (v1.0):** Converts PS2/PC terrain containers (`mXX.mtd`, `.mtc`, `.mti`, `.mta`) into seamless context-padded `512x512` sheets (`6x6` core + `1`-tile neighbor border) for `4x` AI upscaling (`2048x2048`) and slices upscaled sheets back into individual `256x256` FNV-1a hashed tiles for `acz_hdtex.asi`.

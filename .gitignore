@@ -15,6 +15,10 @@ Release/
 *.user
 *.suo
 
+# AI Tool folder
+.agent/
+*.ipynb
+
 # Mod runtime dumps & output
 mods/memory_dumps/
 mods/textures_dump/

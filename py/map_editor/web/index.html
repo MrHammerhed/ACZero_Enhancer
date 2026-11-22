@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACZero Map Editor — Blender-style 3D Workspace</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Blender-style Top Menu Bar -->
+  <header class="bl-topbar">
+    <div class="bl-topbar-left">
+      <div class="bl-logo" title="Ace Combat Zero Map Editor">◆ ACZ</div>
+
+      <div class="bl-menu" data-menu="file">
+        <button class="bl-menu-trigger">File</button>
+        <div class="bl-dropdown">
+          <button data-action="save">Save Overrides <span class="kbd">Ctrl+S</span></button>
+          <button data-action="revert" class="danger-item">Revert Map to Vanilla…</button>
+        </div>
+      </div>
+
+      <div class="bl-menu" data-menu="edit">
+        <button class="bl-menu-trigger">Edit</button>
+        <div class="bl-dropdown">
+          <button data-action="undo">Undo <span class="kbd">Ctrl+Z</span></button>
+          <button data-action="redo">Redo <span class="kbd">Ctrl+Y</span></button>
+          <div class="bl-sep"></div>
+          <button data-action="duplicate">Duplicate Object <span class="kbd">Shift+D</span></button>
+          <button data-action="snap-y">Snap Y to Terrain</button>
+          <button data-action="delete" class="danger-item">Delete Object <span class="kbd">Del</span></button>
+        </div>
+      </div>
+
+      <div class="bl-menu" data-menu="view">
+        <button class="bl-menu-trigger">View</button>
+        <div class="bl-dropdown">
+          <button data-action="toggle-proj">Perspective / Orthographic <span class="kbd">Num 5</span></button>
+          <div class="bl-sep"></div>
+          <button data-action="view-top">Top (Map View) <span class="kbd">Num 7</span></button>
+          <button data-action="view-front">Front <span class="kbd">Num 1</span></button>
+          <button data-action="view-right">Right <span class="kbd">Num 3</span></button>
+          <div class="bl-sep"></div>
+          <button data-action="focus">Frame Selected <span class="kbd">Num .</span></button>
+          <button data-action="frame-all">Frame All (Whole Map) <span class="kbd">Home</span></button>
+          <button data-action="toggle-fly">Walk / Fly Navigation <span class="kbd">Shift+~</span></button>
+          <div class="bl-sep"></div>
+          <button data-action="toggle-toolbar">Toggle Tool Shelf <span class="kbd">T</span></button>
+        </div>
+      </div>
+
+      <div class="bl-menu" data-menu="add">
+        <button class="bl-menu-trigger">Add</button>
+        <div class="bl-dropdown">
+          <button data-action="place-at-target">Place Active Prefab at Pivot</button>
+          <button data-action="tool-place">Interactive Place Mode <span class="kbd">2</span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="bl-topbar-center">
+      <span class="bl-label">Scene:</span>
+      <select id="map-select" title="Select ACZ gameplay map"></select>
+      <span id="override-badge" class="bl-badge hidden">MODIFIED</span>
+    </div>
+
+    <div class="bl-topbar-right">
+      <button id="btn-undo" class="bl-btn" title="Undo (Ctrl+Z)" disabled>↶</button>
+      <button id="btn-redo" class="bl-btn" title="Redo (Ctrl+Y)" disabled>↷</button>
+      <button id="btn-save" class="bl-btn primary" title="Save to mods/maps/<map>/ (Ctrl+S)">Save</button>
+    </div>
+  </header>
+
+  <!-- Main Blender Workspace -->
+  <div class="bl-workspace">
+    <!-- Left/Center: Unified 3D Viewport Editor -->
+    <section class="bl-area bl-viewport-area">
+      <!-- Viewport Header -->
+      <div class="bl-area-header">
+        <div class="bl-header-group">
+          <select id="mode-select" title="Interaction Mode">
+            <option value="select">Object Mode</option>
+            <option value="place">Place Mode</option>
+            <option value="forest">Forest Sculpt (.efa)</option>
+          </select>
+          <label class="bl-pill-check" title="Automatically snap object elevation to terrain height">
+            <input type="checkbox" id="opt-autosnap" checked />
+            <span>Snap Y</span>
+          </label>
+          <div class="bl-inline-prefab" id="header-prefab-wrap">
+            <span class="muted">Prefab:</span>
+            <select id="place-model-select"></select>
+          </div>
+        </div>
+
+        <div class="bl-header-group">
+          <!-- Overlays Popover -->
+          <div class="bl-popover-wrap" id="overlays-wrap">
+            <button id="btn-overlays" class="bl-btn" title="Viewport Overlays">◐ Overlays ▾</button>
+            <div id="overlays-popover" class="bl-popover hidden">
+              <div class="bl-pop-title">Viewport Overlays</div>
+              <label><input type="checkbox" id="layer-terrain" checked /> Terrain Mesh (513×513)</label>
+              <label><input type="checkbox" id="layer-objects" checked /> Placed Objects (.pdl)</label>
+              <label><input type="checkbox" id="layer-sectors" checked /> 16×16 Sector Grid</label>
+              <label><input type="checkbox" id="layer-forest" /> Forest Mask (.efa)</label>
+            </div>
+          </div>
+
+          <!-- Shading Switcher (like Blender's 4 shading spheres) -->
+          <div class="bl-segmented" id="shading-group" title="Viewport Shading">
+            <button data-shade="wire" title="Wireframe Shading">Wire</button>
+            <button data-shade="vanilla" title="Vanilla PS2 Terrain Textures">Vanilla</button>
+            <button data-shade="hd" class="active" title="HD Texture2DArray Shading">HD</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3D Canvas Container -->
+      <div class="bl-viewport-body" id="viewport-body">
+        <div id="canvas-3d-host"></div>
+
+        <!-- Top-left Blender-style View Name Overlay -->
+        <div class="bl-view-info" id="view-info">
+          <div id="view-label" class="bl-view-label">User Perspective</div>
+          <div id="view-sublabel" class="bl-view-sublabel">No Active Object</div>
+        </div>
+
+        <!-- Left Floating Tool Shelf (Toggle with T) -->
+        <div class="bl-toolshelf" id="toolshelf">
+          <button data-tool="select" class="active" title="Select / Transform (1)">
+            <span class="ico">⌖</span>
+            <span class="lbl">Select</span>
+          </button>
+          <button data-tool="place" title="Place Prefab on Terrain (2)">
+            <span class="ico">＋</span>
+            <span class="lbl">Place</span>
+          </button>
+          <button data-tool="forest" title="Forest Brush .efa (3)">
+            <span class="ico">✿</span>
+            <span class="lbl">Forest</span>
+          </button>
+          <div class="bl-shelf-sep"></div>
+          <button id="btn-shelf-snap" title="Snap Selected Y to Terrain">
+            <span class="ico">⤓</span>
+            <span class="lbl">Snap</span>
+          </button>
+          <button id="btn-shelf-dup" title="Duplicate Selected (Shift+D)">
+            <span class="ico">⧉</span>
+            <span class="lbl">Dup</span>
+          </button>
+          <button id="btn-shelf-del" title="Delete Selected (Del)">
+            <span class="ico">✕</span>
+            <span class="lbl">Del</span>
+          </button>
+        </div>
+
+        <!-- Top-right Blender-style 3D Axis Navigation Gizmo & Quick View Buttons -->
+        <div class="bl-nav-cluster">
+          <canvas id="nav-gizmo" width="104" height="104" title="Click axis to align view"></canvas>
+          <div class="bl-nav-buttons">
+            <button id="btn-nav-proj" title="Toggle Perspective / Orthographic (Num 5)">Persp</button>
+            <button id="btn-nav-top" title="Top Orthographic Map View (Num 7)">Top</button>
+            <button id="btn-nav-focus" title="Frame Selected (Num .)">Focus</button>
+            <button id="btn-nav-home" title="Frame Whole Map (Home)">All</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Dock: Outliner (Top) + Properties Editor (Bottom) -->
+    <aside class="bl-right-dock">
+      <!-- Outliner -->
+      <section class="bl-area bl-outliner">
+        <div class="bl-area-header">
+          <span class="bl-area-title">☰ Outliner</span>
+          <div class="bl-segmented small-seg" id="outliner-tabs">
+            <button data-tab="objects" class="active">Objects (<span id="obj-count">0</span>)</button>
+            <button data-tab="models">Prefabs (<span id="mdl-count">0</span>)</button>
+          </div>
+        </div>
+        <div class="bl-outliner-search">
+          <input type="text" id="list-search" placeholder="Search scene…" />
+        </div>
+        <div id="tab-objects" class="bl-tree-list"></div>
+        <div id="tab-models" class="bl-tree-list hidden"></div>
+      </section>
+
+      <!-- Properties Editor -->
+      <section class="bl-area bl-properties">
+        <div class="bl-area-header">
+          <span class="bl-area-title">⚙ Properties</span>
+          <span id="prop-tab-title" class="muted">Object</span>
+        </div>
+
+        <div class="bl-prop-layout">
+          <!-- Vertical Icon Tabs (Blender style) -->
+          <nav class="bl-prop-tabs" id="prop-tabs">
+            <button data-ptab="object" class="active" title="Object Properties">▣</button>
+            <button data-ptab="tool" title="Active Tool &amp; Brush">⚒</button>
+            <button data-ptab="scene" title="Map &amp; Export Properties">◉</button>
+          </nav>
+
+          <!-- Property Panels -->
+          <div class="bl-prop-body">
+            <!-- Object Properties -->
+            <div id="ptab-object" class="bl-prop-page">
+              <div id="no-selection" class="bl-empty">
+                No active object.<br />
+                Click an object in 3D or the Outliner.
+              </div>
+              <div id="obj-fields" class="hidden">
+                <div class="bl-card">
+                  <div class="bl-card-head">Transform <span id="insp-id" class="mono muted">#0</span></div>
+                  <div class="bl-row">
+                    <label for="insp-x">Location X</label>
+                    <input type="number" id="insp-x" step="10" />
+                  </div>
+                  <div class="bl-row">
+                    <label for="insp-y">Y</label>
+                    <input type="number" id="insp-y" step="1" />
+                  </div>
+                  <div class="bl-row">
+                    <label for="insp-z">Z</label>
+                    <input type="number" id="insp-z" step="10" />
+                  </div>
+                  <div class="bl-row">
+                    <label for="insp-model">Prefab</label>
+                    <select id="insp-model"></select>
+                  </div>
+                  <div class="bl-row">
+                    <label>PMI Cell</label>
+                    <span id="insp-tile" class="mono">-</span>
+                  </div>
+                </div>
+
+                <div class="bl-card">
+                  <div class="bl-card-head">Object Actions</div>
+                  <div class="bl-btn-grid">
+                    <button id="btn-snap-y" class="bl-btn">Snap Y</button>
+                    <button id="btn-focus" class="bl-btn">Frame (Num .)</button>
+                    <button id="btn-duplicate" class="bl-btn">Duplicate</button>
+                    <button id="btn-delete" class="bl-btn danger">Delete</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tool & Brush Properties -->
+            <div id="ptab-tool" class="bl-prop-page hidden">
+              <div class="bl-card">
+                <div class="bl-card-head">Forest Brush (.efa)</div>
+                <div class="bl-row">
+                  <label for="brush-radius">Radius</label>
+                  <input type="range" id="brush-radius" min="1" max="12" value="2" />
+                  <span id="brush-radius-val" class="mono">2</span>
+                </div>
+                <div class="bl-segmented full" id="brush-mode-group">
+                  <button data-bmode="paint" class="active">Paint</button>
+                  <button data-bmode="erase">Erase</button>
+                </div>
+                <div class="bl-stat muted">Painted cells: <span id="efa-count" class="mono">0</span> / 16384</div>
+              </div>
+
+              <div class="bl-card">
+                <div class="bl-card-head">Navigation Shortcuts</div>
+                <div class="bl-help-grid">
+                  <span>Orbit</span><span class="kbd">MMB</span>
+                  <span>Pan</span><span class="kbd">Shift+MMB</span>
+                  <span>Zoom</span><span class="kbd">Wheel / Ctrl+MMB</span>
+                  <span>Context Menu</span><span class="kbd">RMB</span>
+                  <span>Fly Mode</span><span class="kbd">Shift+~ / Alt+RMB</span>
+                  <span>Persp / Ortho</span><span class="kbd">Num 5</span>
+                  <span>Top / Front / Right</span><span class="kbd">Num 7 / 1 / 3</span>
+                  <span>Frame Sel / All</span><span class="kbd">Num . / Home</span>
+                  <span>Axis Lock</span><span class="kbd">G then X / Y / Z</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Scene / Map Properties -->
+            <div id="ptab-scene" class="bl-prop-page hidden">
+              <div class="bl-card">
+                <div class="bl-card-head">Map Data</div>
+                <div class="bl-row"><label>HD Tiles</label><span id="info-hd" class="mono">-</span></div>
+                <div class="bl-row"><label>Height Scale</label><span id="info-hscale" class="mono">-</span></div>
+                <div class="bl-row"><label>Terrain Grid</label><span class="mono">513 × 513</span></div>
+                <div class="bl-stat muted small" id="info-ovr-path">Output: mods/maps/</div>
+              </div>
+
+              <div class="bl-card">
+                <div class="bl-card-head">Non-Destructive Export</div>
+                <div class="bl-btn-grid">
+                  <button id="btn-scene-save" class="bl-btn primary">Save to mods/maps</button>
+                  <button id="btn-revert" class="bl-btn danger">Revert to Vanilla</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- Blender-style Bottom Status Bar -->
+  <footer class="bl-statusbar">
+    <span id="status-msg">LMB: Select · MMB: Orbit · Shift+MMB: Pan · RMB: Context Menu · Num5: Persp/Ortho · Num7: Top · Shift+~: Fly</span>
+    <span id="status-coords" class="mono">X: 0.0  Y: 0.0  Z: 0.0  | Tile: (128, 128)</span>
+  </footer>
+
+  <!-- Blender-style RMB Context Menu -->
+  <div id="context-menu" class="bl-context-menu hidden"></div>
+
+  <div id="toast-container"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -119,6 +119,9 @@ static constexpr uintptr_t RVA_LookupOrCreateGsTexture     = 0x00191040;
 static constexpr uintptr_t RVA_GameFontInit                = 0x001FFBD0;
 static constexpr uintptr_t RVA_GameFontUploadStringGlyphs  = 0x001FFCD0;
 static constexpr uintptr_t RVA_LoadTextureFromArcPath      = 0x00214230;
+static constexpr uintptr_t RVA_UploadTerrainTextureArray   = 0x0018E940;
+static constexpr uintptr_t RVA_TerrainTexArray             = 0x0033BC50;
+static constexpr uintptr_t RVA_UploadRingOffset            = 0x003567A8;
 
 // Screen aspect option & render dimensions (read-only for _16x9 / _21x9 texture variant selection)
 static constexpr uintptr_t RVA_ScreenSizeOption            = 0x00310E8C; // CSysData+0x2C: 0 = 4:3, 1 = 16:9, 2 = 21:9 (+0x313E8C in v2.0.0.1)
@@ -206,6 +209,14 @@ static const uint8_t PROLOGUE_UploadTextureToGpu[18] = {
     0x48, 0x81, 0xEC, 0x50, 0x01, 0x00, 0x00        // sub rsp, 150h
 };
 
+static const uint8_t PROLOGUE_UploadTerrainTextureArray[15] = {
+    0x48, 0x89, 0x74, 0x24, 0x18,                   // mov [rsp+18h], rsi
+    0x48, 0x89, 0x7C, 0x24, 0x20,                   // mov [rsp+20h], rdi
+    0x55,                                           // push rbp
+    0x41, 0x54,                                     // push r12
+    0x41, 0x55                                      // push r13
+};
+
 
 // ----------------------------------------------------------------------------
 // Engine Function Typedefs
@@ -256,6 +267,7 @@ using FnAllocatePooledTexture = uint8_t* (__fastcall*)(
     uint32_t height,
     uint32_t mip_levels,
     uint32_t dxgi_format,
+    uint64_t unused_arg5,
     void* existing_slot
 );
 using FnUploadTextureToGpu = void (__fastcall*)(
@@ -266,6 +278,11 @@ using FnDestroyPooledTexture = void (__fastcall*)(
 );
 using FnEngineMalloc = void* (__fastcall*)(
     size_t size
+);
+using FnUploadTerrainTextureArray = void (__fastcall*)(
+    int32_t slot_idx,
+    const uint32_t* clut_rgba,
+    const uint8_t* tile_pixels
 );
 
 static FnInitGimDescriptor          g_OrigInitGimDescriptor          = nullptr;
@@ -284,6 +301,12 @@ static FnUploadTextureToGpu         g_OrigUploadTextureToGpu         = nullptr;
 static SRWLOCK                      g_UploadTextureGpuLock           = SRWLOCK_INIT;
 static FnDestroyPooledTexture       g_DestroyPooledTexture           = nullptr;
 static FnEngineMalloc               g_EngineMalloc                   = nullptr;
+static FnUploadTerrainTextureArray  g_OrigUploadTerrainTextureArray  = nullptr;
+static uint8_t**                    g_TerrainTexArrayPtr             = nullptr;
+static uint64_t*                    g_UploadOffPtr                   = nullptr;
+static uint8_t*                     g_HdTerrainTex[16]{};
+static uint32_t                     g_HdTerrainDim[16]{};
+static std::mutex                   g_TerrainArrayMutex;
 
 // ----------------------------------------------------------------------------
 // Plugin State & Configuration
@@ -626,8 +649,9 @@ static std::atomic<void*>                                          g_BtnOrigSlot
 static std::atomic<uint32_t>                                       g_BtnOrigHandle{0xFFFFFFFFu};
 static std::atomic<int>                                            g_LastSyncedPadVariant{-1};
 
-// 6. Lock-free TIM2 cache + Content Hash Table + Per-TBP dynamic sprite tracking (v0.16)
+// 6. Lock-free TIM2 cache + Terrain slot marker + Content Hash Table + Per-TBP dynamic sprite tracking (v0.16+)
 static LockFreeGimFastSlot                                         g_FastTim2Table[FAST_GIM_CACHE_SIZE]{};
+static std::atomic<bool>                                           g_SlotIsTerrainTile[MAX_CUSTOM_TEXTURES + 1]{};
 struct LockFreeContentHashSlot {
     std::atomic<uint64_t> hash64{0};
     std::atomic<uint16_t> slot_idx{0};
@@ -1416,6 +1440,69 @@ static constexpr uint32_t DDS_CACHE_TAG_MAGIC  = 0x41435A33u; // "ACZ3" (v0.23.2
 static constexpr uint32_t DXGI_FMT_BGRA8_UNORM = 87u;         // DXGI_FORMAT_B8G8R8A8_UNORM
 static constexpr uint32_t DXGI_FMT_BC7_UNORM   = 98u;         // DXGI_FORMAT_BC7_UNORM
 
+// Shared BC7 Mode 6 endpoint quantizer, 16-pixel projector, anchor swap, and packer.
+static inline void FinalizeBc7Mode6Endpoints(
+    const int32_t e0_i[4],
+    const int32_t e1_i[4],
+    const uint8_t px[16][4],
+    uint8_t       out_block[16]
+) {
+    uint32_t p0 = (((e0_i[0] & 1) + (e0_i[1] & 1) + (e0_i[2] & 1) + (e0_i[3] & 1)) >= 2) ? 1u : 0u;
+    uint32_t p1 = (((e1_i[0] & 1) + (e1_i[1] & 1) + (e1_i[2] & 1) + (e1_i[3] & 1)) >= 2) ? 1u : 0u;
+
+    uint64_t c0[4], c1[4];
+    int32_t  v0[4], v1[4], dv[4];
+    int32_t  dlen2 = 0;
+    for (int c = 0; c < 4; ++c) {
+        int32_t q0 = std::clamp((e0_i[c] - static_cast<int32_t>(p0) + 1) >> 1, 0, 127);
+        int32_t q1 = std::clamp((e1_i[c] - static_cast<int32_t>(p1) + 1) >> 1, 0, 127);
+        c0[c] = static_cast<uint64_t>(q0);
+        c1[c] = static_cast<uint64_t>(q1);
+        v0[c] = (q0 << 1) | static_cast<int32_t>(p0);
+        v1[c] = (q1 << 1) | static_cast<int32_t>(p1);
+        dv[c] = v1[c] - v0[c];
+        dlen2 += dv[c] * dv[c];
+    }
+
+    uint8_t indices[16]{};
+    if (dlen2 > 0) {
+        for (int i = 0; i < 16; ++i) {
+            int32_t dot = (static_cast<int32_t>(px[i][0]) - v0[0]) * dv[0] +
+                          (static_cast<int32_t>(px[i][1]) - v0[1]) * dv[1] +
+                          (static_cast<int32_t>(px[i][2]) - v0[2]) * dv[2] +
+                          (static_cast<int32_t>(px[i][3]) - v0[3]) * dv[3];
+            int32_t idx = (dot * 15 + (dlen2 >> 1)) / dlen2;
+            indices[i] = static_cast<uint8_t>(std::clamp(idx, 0, 15));
+        }
+    }
+
+    // BC7 Mode 6 anchor index 0 constraint: MSB of index[0] must be 0 (< 8)
+    if (indices[0] >= 8u) {
+        for (int c = 0; c < 4; ++c) {
+            std::swap(c0[c], c1[c]);
+        }
+        std::swap(p0, p1);
+        for (int i = 0; i < 16; ++i) {
+            indices[i] = static_cast<uint8_t>(15u - indices[i]);
+        }
+    }
+
+    uint64_t lo = 0x40ULL |
+                  (c0[0] << 7)  | (c1[0] << 14) |
+                  (c0[1] << 21) | (c1[1] << 28) |
+                  (c0[2] << 35) | (c1[2] << 42) |
+                  (c0[3] << 49) | (c1[3] << 56) |
+                  (static_cast<uint64_t>(p0) << 63);
+    uint64_t hi = static_cast<uint64_t>(p1) |
+                  (static_cast<uint64_t>(indices[0] & 0x07u) << 1);
+    for (int k = 1; k < 16; ++k) {
+        hi |= (static_cast<uint64_t>(indices[k] & 0x0Fu) << (4 * k));
+    }
+
+    *reinterpret_cast<uint64_t*>(out_block + 0) = lo;
+    *reinterpret_cast<uint64_t*>(out_block + 8) = hi;
+}
+
 // High-precision BC7 Mode 6 block encoder (full 7-bit RGB + 7-bit A + 1-bit P0/P1 = 8-bit RGBA endpoints,
 // 16-level 4-bit interpolation across all 16 pixels, with transparent-pixel RGB bleed normalization).
 static void EncodeBlockBc7Mode6(const uint8_t px_in[16][4], uint8_t out_block[16]) {
@@ -1552,60 +1639,85 @@ static void EncodeBlockBc7Mode6(const uint8_t px_in[16][4], uint8_t out_block[16
         }
     }
 
-    uint32_t p0 = (((e0_i[0] & 1) + (e0_i[1] & 1) + (e0_i[2] & 1) + (e0_i[3] & 1)) >= 2) ? 1u : 0u;
-    uint32_t p1 = (((e1_i[0] & 1) + (e1_i[1] & 1) + (e1_i[2] & 1) + (e1_i[3] & 1)) >= 2) ? 1u : 0u;
+    FinalizeBc7Mode6Endpoints(e0_i, e1_i, px, out_block);
+}
 
-    uint64_t c0[4], c1[4];
-    int32_t  v0[4], v1[4], dv[4];
-    int32_t  dlen2 = 0;
-    for (int c = 0; c < 4; ++c) {
-        int32_t q0 = std::clamp((e0_i[c] - static_cast<int32_t>(p0) + 1) >> 1, 0, 127);
-        int32_t q1 = std::clamp((e1_i[c] - static_cast<int32_t>(p1) + 1) >> 1, 0, 127);
-        c0[c] = static_cast<uint64_t>(q0);
-        c1[c] = static_cast<uint64_t>(q1);
-        v0[c] = (q0 << 1) | static_cast<int32_t>(p0);
-        v1[c] = (q1 << 1) | static_cast<int32_t>(p1);
-        dv[c] = v1[c] - v0[c];
-        dlen2 += dv[c] * dv[c];
-    }
-
-    uint8_t indices[16]{};
-    if (dlen2 > 0) {
-        for (int i = 0; i < 16; ++i) {
-            int32_t dot = (static_cast<int32_t>(px[i][0]) - v0[0]) * dv[0] +
-                          (static_cast<int32_t>(px[i][1]) - v0[1]) * dv[1] +
-                          (static_cast<int32_t>(px[i][2]) - v0[2]) * dv[2] +
-                          (static_cast<int32_t>(px[i][3]) - v0[3]) * dv[3];
-            int32_t idx = (dot * 15 + (dlen2 >> 1)) / dlen2;
-            indices[i] = static_cast<uint8_t>(std::clamp(idx, 0, 15));
-        }
-    }
-
-    // BC7 Mode 6 anchor index 0 constraint: MSB of index[0] must be 0 (< 8)
-    if (indices[0] >= 8u) {
-        for (int c = 0; c < 4; ++c) {
-            std::swap(c0[c], c1[c]);
-        }
-        std::swap(p0, p1);
-        for (int i = 0; i < 16; ++i) {
-            indices[i] = static_cast<uint8_t>(15u - indices[i]);
-        }
-    }
-
+static inline void EncodeBlockBc7Mode6Solid(
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a,
+    uint8_t out_block[16]
+) {
+    uint32_t p = (((r & 1u) + (g & 1u) + (b & 1u) + (a & 1u)) >= 2u) ? 1u : 0u;
+    uint64_t q0 = static_cast<uint64_t>(std::clamp((static_cast<int32_t>(r) - static_cast<int32_t>(p) + 1) >> 1, 0, 127));
+    uint64_t q1 = static_cast<uint64_t>(std::clamp((static_cast<int32_t>(g) - static_cast<int32_t>(p) + 1) >> 1, 0, 127));
+    uint64_t q2 = static_cast<uint64_t>(std::clamp((static_cast<int32_t>(b) - static_cast<int32_t>(p) + 1) >> 1, 0, 127));
+    uint64_t q3 = static_cast<uint64_t>(std::clamp((static_cast<int32_t>(a) - static_cast<int32_t>(p) + 1) >> 1, 0, 127));
     uint64_t lo = 0x40ULL |
-                  (c0[0] << 7)  | (c1[0] << 14) |
-                  (c0[1] << 21) | (c1[1] << 28) |
-                  (c0[2] << 35) | (c1[2] << 42) |
-                  (c0[3] << 49) | (c1[3] << 56) |
-                  (static_cast<uint64_t>(p0) << 63);
-    uint64_t hi = static_cast<uint64_t>(p1) |
-                  (static_cast<uint64_t>(indices[0] & 0x07u) << 1);
-    for (int k = 1; k < 16; ++k) {
-        hi |= (static_cast<uint64_t>(indices[k] & 0x0Fu) << (4 * k));
-    }
-
+                  (q0 << 7)  | (q0 << 14) |
+                  (q1 << 21) | (q1 << 28) |
+                  (q2 << 35) | (q2 << 42) |
+                  (q3 << 49) | (q3 << 56) |
+                  (static_cast<uint64_t>(p) << 63);
+    uint64_t hi = static_cast<uint64_t>(p);
     *reinterpret_cast<uint64_t*>(out_block + 0) = lo;
     *reinterpret_cast<uint64_t*>(out_block + 8) = hi;
+}
+
+static inline void EncodeBlockBc7Mode6Fast(const uint8_t px[16][4], uint8_t out_block[16]) {
+    const uint32_t p0_u32 = *reinterpret_cast<const uint32_t*>(px[0]);
+    bool all_equal = true;
+    for (int i = 1; i < 16; ++i) {
+        if (*reinterpret_cast<const uint32_t*>(px[i]) != p0_u32) {
+            all_equal = false;
+            break;
+        }
+    }
+    if (all_equal) {
+        EncodeBlockBc7Mode6Solid(px[0][0], px[0][1], px[0][2], px[0][3], out_block);
+        return;
+    }
+
+    static constexpr int kCorners[4] = { 0, 3, 12, 15 };
+    int idx0 = 0, idx1 = 0;
+    int32_t best_d2 = -1;
+    for (int a_i = 0; a_i < 4; ++a_i) {
+        int ia = kCorners[a_i];
+        for (int b_i = a_i + 1; b_i < 4; ++b_i) {
+            int ib = kCorners[b_i];
+            int32_t dr = static_cast<int32_t>(px[ib][0]) - static_cast<int32_t>(px[ia][0]);
+            int32_t dg = static_cast<int32_t>(px[ib][1]) - static_cast<int32_t>(px[ia][1]);
+            int32_t db = static_cast<int32_t>(px[ib][2]) - static_cast<int32_t>(px[ia][2]);
+            int32_t da = static_cast<int32_t>(px[ib][3]) - static_cast<int32_t>(px[ia][3]);
+            int32_t d2 = dr * dr + dg * dg + db * db + da * da;
+            if (d2 > best_d2) {
+                best_d2 = d2;
+                idx0 = ia;
+                idx1 = ib;
+            }
+        }
+    }
+
+    int32_t e0_i[4], e1_i[4];
+    if (best_d2 > 0) {
+        for (int c = 0; c < 4; ++c) {
+            e0_i[c] = px[idx0][c];
+            e1_i[c] = px[idx1][c];
+        }
+    } else {
+        for (int c = 0; c < 4; ++c) {
+            uint8_t mn = 255, mx = 0;
+            for (int i = 0; i < 16; ++i) {
+                if (px[i][c] < mn) mn = px[i][c];
+                if (px[i][c] > mx) mx = px[i][c];
+            }
+            e0_i[c] = mn;
+            e1_i[c] = mx;
+        }
+    }
+
+    FinalizeBc7Mode6Endpoints(e0_i, e1_i, px, out_block);
 }
 
 static fs::path GetDdsCachePathForPng(const std::string& png_path) {
@@ -1845,7 +1957,7 @@ static uint8_t* LoadTextureFromDdsCacheFile(
         return nullptr;
     }
 
-    uint8_t* hd_tex = g_AllocatePooledTexture(w, h, 1u, fmt, nullptr);
+    uint8_t* hd_tex = g_AllocatePooledTexture(w, h, 1u, fmt, 0ull, nullptr);
     if (!hd_tex) {
         fclose(df);
         return nullptr;
@@ -3416,6 +3528,7 @@ static void ScanTexturesDirectory() {
         g_SlotAltExpectedW[i].store(0, std::memory_order_relaxed);
         g_SlotAltExpectedH[i].store(0, std::memory_order_relaxed);
         g_SlotAllowHalfDim[i].store(false, std::memory_order_relaxed);
+        g_SlotIsTerrainTile[i].store(false, std::memory_order_relaxed);
     }
 
     std::error_code ec;
@@ -3445,7 +3558,9 @@ static void ScanTexturesDirectory() {
             } else {
                 fs::path fp = cur_dir / wfd.cFileName;
                 std::wstring wext = fp.extension().wstring();
-                if (_wcsicmp(wext.c_str(), L".png") == 0) {
+                if (_wcsicmp(wext.c_str(), L".png") == 0 ||
+                    _wcsicmp(wext.c_str(), L".jpg") == 0 ||
+                    _wcsicmp(wext.c_str(), L".jpeg") == 0) {
                     png_files.push_back(std::move(fp));
                 } else if (_wcsicmp(wext.c_str(), L".json") == 0) {
                     json_files.push_back(std::move(fp));
@@ -3756,6 +3871,18 @@ static void ScanTexturesDirectory() {
         if (json_exp_w > 0 && json_exp_h > 0) {
             g_SlotExpectedW[slot_idx].store(json_exp_w, std::memory_order_release);
             g_SlotExpectedH[slot_idx].store(json_exp_h, std::memory_order_release);
+        } else {
+            // Detect HD terrain tiles placed under mods\textures\terrain\ (or any subfolder)
+            std::string lower_path = effective_png_path.string();
+            for (char& ch : lower_path) {
+                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+                if (ch == '/') ch = '\\';
+            }
+            if (lower_path.find("\\terrain\\") != std::string::npos) {
+                g_SlotIsTerrainTile[slot_idx].store(true, std::memory_order_release);
+                g_SlotExpectedW[slot_idx].store(64u, std::memory_order_release);
+                g_SlotExpectedH[slot_idx].store(64u, std::memory_order_release);
+            }
         }
         for (uint64_t h : target_hashes) {
             target_map[h] = slot_idx;
@@ -7111,6 +7238,7 @@ static inline int GetActiveTextureAspectTier() {
 using FnPollAllInputDevices = void(__fastcall*)(uint8_t* state_array);
 static FnPollAllInputDevices g_OrigPollAllInputDevices = nullptr;
 static std::atomic<int> s_last_active_input_variant{-1};
+static std::atomic<bool> g_ExternalInputNotifyActive{false};
 
 static bool IsForegroundKeyboardActive() {
     HWND fg = GetForegroundWindow();
@@ -7214,7 +7342,7 @@ static int DetectEngineActiveInputVariantSEH(uintptr_t exe_base, bool has_ps_hid
         kb_active_now = true;
     }
 
-    if (g_OrigPollAllInputDevices != nullptr) {
+    if (g_OrigPollAllInputDevices != nullptr || g_ExternalInputNotifyActive.load(std::memory_order_relaxed)) {
         int live_var = s_last_active_input_variant.load(std::memory_order_relaxed);
         if (live_var >= 0 && live_var <= 2) {
             return (live_var == 2) ? 2 : (any_gamepad_connected ? pad_type : 2);
@@ -7679,6 +7807,9 @@ static uint8_t* __fastcall Hook_LookupOrCreateGsTexture(
 ) {
     if (gs_ctx != nullptr && g_LastGsRenderCtx.load(std::memory_order_relaxed) != gs_ctx) {
         g_LastGsRenderCtx.store(gs_ctx, std::memory_order_relaxed);
+    }
+    if ((tex0_reg & 0x03F00000ULL) == 0x01000000ULL) {
+        return g_OrigLookupOrCreateGsTexture(gs_ctx, tex0_reg, flag_r8);
     }
     (void)GetEffectiveGamepadVariantIndex();
 
@@ -8712,6 +8843,42 @@ static bool IsControllerStateActiveNow(const uint8_t* st) {
     return false;
 }
 
+static void UpdateLiveInputGlyphVariant(const uint8_t* pad_st, const uint8_t* kb_st, uintptr_t pad_dev) {
+    __try {
+        bool has_ps_hid = false, has_any_hid = false;
+        PollConnectedHidGamepads(&has_ps_hid, &has_any_hid);
+        int pad_var = has_ps_hid ? 0 : 1;
+        if (pad_dev != 0) {
+            uint32_t dtype = *reinterpret_cast<const uint32_t*>(pad_dev + 0x00u);
+            if (dtype == 2u) {
+                uint32_t steam_t = *reinterpret_cast<const uint32_t*>(pad_dev + 0x94u);
+                pad_var = (steam_t == 5u || steam_t == 12u || steam_t == 13u || has_ps_hid) ? 0 : 1;
+            } else if (dtype == 0u) {
+                uint32_t guid_d1 = *reinterpret_cast<const uint32_t*>(pad_dev + 0x04u);
+                pad_var = ((guid_d1 & 0xFFFFu) == 0x054Cu || has_ps_hid) ? 0 : 1;
+            }
+        }
+
+        if (IsControllerStateActiveNow(pad_st)) {
+            s_last_active_input_variant.store(pad_var, std::memory_order_relaxed);
+        } else if (IsControllerStateActiveNow(kb_st) || IsForegroundKeyboardActive()) {
+            s_last_active_input_variant.store(2, std::memory_order_relaxed);
+        } else if (s_last_active_input_variant.load(std::memory_order_relaxed) < 0) {
+            s_last_active_input_variant.store((pad_dev != 0 || has_any_hid) ? pad_var : 2, std::memory_order_relaxed);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+extern "C" __declspec(dllexport) void __fastcall AczHdTex_NotifyInputPolled(
+    const uint8_t* pad_st,
+    const uint8_t* kb_st,
+    uintptr_t pad_dev
+) {
+    g_ExternalInputNotifyActive.store(true, std::memory_order_relaxed);
+    UpdateLiveInputGlyphVariant(pad_st, kb_st, pad_dev);
+}
+
 static void __fastcall Hook_PollAllInputDevices(uint8_t* state_array) {
     if (!g_OrigPollAllInputDevices || !state_array) {
         if (g_OrigPollAllInputDevices) g_OrigPollAllInputDevices(state_array);
@@ -8872,29 +9039,11 @@ static void __fastcall Hook_PollAllInputDevices(uint8_t* state_array) {
 
             bool has_ps_hid = false, has_any_hid = false;
             PollConnectedHidGamepads(&has_ps_hid, &has_any_hid);
-            int pad_var = has_ps_hid ? 0 : 1;
-            if (pad_dev != 0) {
-                uint32_t dtype = *reinterpret_cast<const uint32_t*>(pad_dev + 0x00u);
-                if (dtype == 2u) {
-                    uint32_t steam_t = *reinterpret_cast<const uint32_t*>(pad_dev + 0x94u);
-                    pad_var = (steam_t == 5u || steam_t == 12u || steam_t == 13u || has_ps_hid) ? 0 : 1;
-                } else if (dtype == 0u) {
-                    uint32_t guid_d1 = *reinterpret_cast<const uint32_t*>(pad_dev + 0x04u);
-                    pad_var = ((guid_d1 & 0xFFFFu) == 0x054Cu || has_ps_hid) ? 0 : 1;
-                }
-            }
-
             if (has_ps_hid) {
                 UpdateSonyVibrationFromGameSEH(g_ExeBase, p1_large, p1_small);
             }
 
-            if (IsControllerStateActiveNow(pad_st)) {
-                s_last_active_input_variant.store(pad_var, std::memory_order_relaxed);
-            } else if (IsControllerStateActiveNow(kb_st) || IsForegroundKeyboardActive()) {
-                s_last_active_input_variant.store(2, std::memory_order_relaxed);
-            } else if (s_last_active_input_variant.load(std::memory_order_relaxed) < 0) {
-                s_last_active_input_variant.store((pad_dev != 0 || has_any_hid) ? pad_var : 2, std::memory_order_relaxed);
-            }
+            UpdateLiveInputGlyphVariant(pad_st, kb_st, pad_dev);
 
             // Handle Single-Player Seamless Merge vs Unlocked 2-Player Separate Controls:
             if (cfg_ctrl2 == ~0ULL && type0 != 0xFFFFFFFFu && type1 != 0xFFFFFFFFu && type0 != type1) {
@@ -8955,6 +9104,504 @@ static bool InstallDetour64(
     const void* hook_fn,
     void** out_trampoline
 );
+
+// ----------------------------------------------------------------------------
+// Native PC Terrain Texture2DArray Hook (+0x18E940) & BC7 Helpers
+// ----------------------------------------------------------------------------
+static bool SafePrepareTerrainUploadInputs(
+    const uint32_t* clut_rgba,
+    const uint8_t*  tile_pixels,
+    uint32_t        out_pal[256],
+    uint16_t        out_slots[1024],
+    uint32_t*       out_matched_count
+) {
+    if (!clut_rgba || !tile_pixels || !out_pal || !out_slots || !out_matched_count) return false;
+    __try {
+        volatile uint32_t probe_c = clut_rgba[255];
+        volatile uint8_t  probe_p = tile_pixels[1024u * 4096u - 1u];
+        (void)probe_c;
+        (void)probe_p;
+
+        for (uint32_t i = 0; i < 256u; ++i) {
+            uint32_t c = clut_rgba[i];
+            uint32_t a = (c >> 24) * 2u;
+            if (a > 255u) a = 255u;
+            uint32_t rgba = (c & 0x00FFFFFFu) | (a << 24);
+            uint32_t dst_idx = (i & 0xE7u) | ((i >> 1) & 0x08u) | ((i & 0x08u) << 1);
+            out_pal[dst_idx] = rgba;
+        }
+
+        uint32_t matched = 0;
+        for (uint32_t t = 0; t < 1024u; ++t) {
+            const uint8_t* tile = tile_pixels + static_cast<size_t>(t) * 4096u;
+            uint64_t h = FNV1A_64_OFFSET;
+            for (size_t k = 0; k < 4096u; ++k) {
+                h ^= static_cast<uint64_t>(tile[k]);
+                h *= FNV1A_64_PRIME;
+            }
+            uint16_t s = LockFreeLookupContentHash(h);
+            out_slots[t] = s;
+            if (s != 0) ++matched;
+        }
+        *out_matched_count = matched;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+struct TerrainBilinTap {
+    uint8_t i0, i1, w0, w1;
+};
+
+static void BuildTerrainBilinLut(uint32_t target_dim, TerrainBilinTap* out_lut) {
+    const float scale = 64.0f / static_cast<float>(target_dim);
+    for (uint32_t d = 0; d < target_dim; ++d) {
+        float s = (static_cast<float>(d) + 0.5f) * scale - 0.5f;
+        if (s < 0.0f) s = 0.0f;
+        if (s > 63.0f) s = 63.0f;
+        uint32_t i0 = static_cast<uint32_t>(s);
+        uint32_t i1 = (i0 + 1u < 64u) ? (i0 + 1u) : 63u;
+        uint32_t w1 = static_cast<uint32_t>((s - static_cast<float>(i0)) * 8.0f + 0.5f);
+        if (w1 > 8u) w1 = 8u;
+        out_lut[d].i0 = static_cast<uint8_t>(i0);
+        out_lut[d].i1 = static_cast<uint8_t>(i1);
+        out_lut[d].w0 = static_cast<uint8_t>(8u - w1);
+        out_lut[d].w1 = static_cast<uint8_t>(w1);
+    }
+}
+
+static void EncodeStockTerrainTileSlice(
+    const uint8_t*         tile_idx_4096,
+    const uint32_t         pal[256],
+    uint32_t               target_dim,
+    uint32_t               d3d_row_pitch,
+    const TerrainBilinTap* lut,
+    uint8_t*               dst_slice
+) {
+    uint32_t src64[4096];
+    uint32_t first_col = pal[tile_idx_4096[0]];
+    bool all_same = true;
+    for (size_t i = 0; i < 4096u; ++i) {
+        uint32_t c = pal[tile_idx_4096[i]];
+        src64[i] = c;
+        if (c != first_col) all_same = false;
+    }
+
+    const uint32_t bx_cnt = target_dim / 4u;
+    const uint32_t by_cnt = target_dim / 4u;
+
+    if (all_same) {
+        uint8_t solid_blk[16];
+        EncodeBlockBc7Mode6Solid(
+            static_cast<uint8_t>(first_col & 0xFFu),
+            static_cast<uint8_t>((first_col >> 8) & 0xFFu),
+            static_cast<uint8_t>((first_col >> 16) & 0xFFu),
+            static_cast<uint8_t>((first_col >> 24) & 0xFFu),
+            solid_blk
+        );
+        for (uint32_t by = 0; by < by_cnt; ++by) {
+            uint8_t* dst_row = dst_slice + static_cast<size_t>(by) * d3d_row_pitch;
+            for (uint32_t bx = 0; bx < bx_cnt; ++bx) {
+                std::memcpy(dst_row + static_cast<size_t>(bx) * 16u, solid_blk, 16u);
+            }
+        }
+        return;
+    }
+
+    for (uint32_t by = 0; by < by_cnt; ++by) {
+        uint8_t* dst_row = dst_slice + static_cast<size_t>(by) * d3d_row_pitch;
+        const uint32_t y_base = by * 4u;
+        for (uint32_t bx = 0; bx < bx_cnt; ++bx) {
+            const uint32_t x_base = bx * 4u;
+            uint8_t blk_px[16][4];
+            for (uint32_t py = 0; py < 4u; ++py) {
+                const TerrainBilinTap& ty = lut[y_base + py];
+                const uint32_t* row0 = src64 + static_cast<size_t>(ty.i0) * 64u;
+                const uint32_t* row1 = src64 + static_cast<size_t>(ty.i1) * 64u;
+                for (uint32_t px_i = 0; px_i < 4u; ++px_i) {
+                    const TerrainBilinTap& tx = lut[x_base + px_i];
+                    uint32_t c00 = row0[tx.i0];
+                    uint32_t c10 = row0[tx.i1];
+                    uint32_t c01 = row1[tx.i0];
+                    uint32_t c11 = row1[tx.i1];
+                    uint32_t w00 = static_cast<uint32_t>(tx.w0) * ty.w0;
+                    uint32_t w10 = static_cast<uint32_t>(tx.w1) * ty.w0;
+                    uint32_t w01 = static_cast<uint32_t>(tx.w0) * ty.w1;
+                    uint32_t w11 = static_cast<uint32_t>(tx.w1) * ty.w1;
+                    uint32_t k = py * 4u + px_i;
+                    for (int ch = 0; ch < 4; ++ch) {
+                        uint32_t shift = static_cast<uint32_t>(ch * 8);
+                        uint32_t v = ((c00 >> shift) & 0xFFu) * w00 +
+                                     ((c10 >> shift) & 0xFFu) * w10 +
+                                     ((c01 >> shift) & 0xFFu) * w01 +
+                                     ((c11 >> shift) & 0xFFu) * w11;
+                        blk_px[k][ch] = static_cast<uint8_t>((v + 32u) >> 6);
+                    }
+                }
+            }
+            EncodeBlockBc7Mode6Fast(blk_px, dst_row + static_cast<size_t>(bx) * 16u);
+        }
+    }
+}
+
+static bool TryLoadFastDdsTerrainSlice(
+    const std::string& png_path,
+    uint32_t           target_dim,
+    uint32_t           d3d_row_pitch,
+    uint8_t*           dst_slice
+) {
+    if (!g_EnableDdsCache || target_dim != 256u) return false;
+    fs::path dds_path;
+    if (!BuildOrUpdateDdsCacheForPng(png_path, false, &dds_path)) {
+        return false;
+    }
+
+    FILE* df = _fsopen(dds_path.string().c_str(), "rb", _SH_DENYNO);
+    if (!df) return false;
+
+    DdsFileHeaderDx10 hdr{};
+    bool hdr_ok = (fread(&hdr, 1, sizeof(hdr), df) == sizeof(hdr));
+    if (!hdr_ok ||
+        hdr.dwMagic != DDS_MAGIC_WORD ||
+        hdr.dwSize != 124u ||
+        hdr.ddspf.dwFourCC != DDS_FOURCC_DX10 ||
+        hdr.dwReserved1[3] != DDS_CACHE_TAG_MAGIC ||
+        hdr.dwWidth != 256u ||
+        hdr.dwHeight != 256u ||
+        hdr.dxgiFormat != DXGI_FMT_BC7_UNORM) {
+        fclose(df);
+        return false;
+    }
+
+    constexpr uint32_t kSrcRowPitch = 1024u; // (256 / 4) * 16
+    constexpr uint32_t kNumRows     = 64u;   // 256 / 4
+    bool read_ok = false;
+    if (d3d_row_pitch == kSrcRowPitch) {
+        read_ok = (fread(dst_slice, 1, 65536u, df) == 65536u);
+    } else if (d3d_row_pitch > kSrcRowPitch) {
+        read_ok = true;
+        for (uint32_t r = 0; r < kNumRows; ++r) {
+            if (fread(dst_slice + static_cast<size_t>(r) * d3d_row_pitch, 1, kSrcRowPitch, df) != kSrcRowPitch) {
+                read_ok = false;
+                break;
+            }
+        }
+    }
+    fclose(df);
+    return read_ok;
+}
+
+static bool TryEncodeHdPngTerrainSlice(
+    const std::string&     png_path,
+    const uint8_t*         tile_idx_4096,
+    const uint32_t         pal[256],
+    bool                   stock_has_alpha,
+    uint32_t               target_dim,
+    uint32_t               d3d_row_pitch,
+    const TerrainBilinTap* lut,
+    uint8_t*               dst_slice
+) {
+    std::vector<uint8_t> rgba;
+    uint32_t pw = 0, ph = 0;
+    if (!DecodePngFileViaWic(png_path, rgba, &pw, &ph) || pw == 0 || ph == 0) {
+        return false;
+    }
+
+    if (pw != target_dim || ph != target_dim) {
+        std::vector<uint8_t> resized(static_cast<size_t>(target_dim) * target_dim * 4u);
+        const float scale_x = static_cast<float>(pw) / static_cast<float>(target_dim);
+        const float scale_y = static_cast<float>(ph) / static_cast<float>(target_dim);
+        for (uint32_t dy = 0; dy < target_dim; ++dy) {
+            float sy = (static_cast<float>(dy) + 0.5f) * scale_y - 0.5f;
+            sy = std::clamp(sy, 0.0f, static_cast<float>(ph - 1u));
+            uint32_t y0 = static_cast<uint32_t>(sy);
+            uint32_t y1 = (y0 + 1u < ph) ? (y0 + 1u) : (ph - 1u);
+            float fy = sy - static_cast<float>(y0);
+            const uint8_t* row0 = rgba.data() + static_cast<size_t>(y0) * pw * 4u;
+            const uint8_t* row1 = rgba.data() + static_cast<size_t>(y1) * pw * 4u;
+            for (uint32_t dx = 0; dx < target_dim; ++dx) {
+                float sx = (static_cast<float>(dx) + 0.5f) * scale_x - 0.5f;
+                sx = std::clamp(sx, 0.0f, static_cast<float>(pw - 1u));
+                uint32_t x0 = static_cast<uint32_t>(sx);
+                uint32_t x1 = (x0 + 1u < pw) ? (x0 + 1u) : (pw - 1u);
+                float fx = sx - static_cast<float>(x0);
+                float w00 = (1.0f - fx) * (1.0f - fy);
+                float w10 = fx * (1.0f - fy);
+                float w01 = (1.0f - fx) * fy;
+                float w11 = fx * fy;
+                uint8_t* dst_p = &resized[(static_cast<size_t>(dy) * target_dim + dx) * 4u];
+                for (int ch = 0; ch < 4; ++ch) {
+                    float val = w00 * row0[x0 * 4u + ch] + w10 * row0[x1 * 4u + ch] +
+                                w01 * row1[x0 * 4u + ch] + w11 * row1[x1 * 4u + ch];
+                    dst_p[ch] = static_cast<uint8_t>(std::clamp(static_cast<int>(val + 0.5f), 0, 255));
+                }
+            }
+        }
+        rgba.swap(resized);
+    }
+
+    if (stock_has_alpha) {
+        bool png_has_alpha = false;
+        const size_t total_px = static_cast<size_t>(target_dim) * target_dim;
+        for (size_t i = 0; i < total_px; ++i) {
+            if (rgba[i * 4u + 3u] < 255u) {
+                png_has_alpha = true;
+                break;
+            }
+        }
+        if (!png_has_alpha) {
+            for (uint32_t dy = 0; dy < target_dim; ++dy) {
+                const TerrainBilinTap& ty = lut[dy];
+                const uint8_t* r0 = tile_idx_4096 + static_cast<size_t>(ty.i0) * 64u;
+                const uint8_t* r1 = tile_idx_4096 + static_cast<size_t>(ty.i1) * 64u;
+                for (uint32_t dx = 0; dx < target_dim; ++dx) {
+                    const TerrainBilinTap& tx = lut[dx];
+                    uint32_t a00 = (pal[r0[tx.i0]] >> 24) & 0xFFu;
+                    uint32_t a10 = (pal[r0[tx.i1]] >> 24) & 0xFFu;
+                    uint32_t a01 = (pal[r1[tx.i0]] >> 24) & 0xFFu;
+                    uint32_t a11 = (pal[r1[tx.i1]] >> 24) & 0xFFu;
+                    uint32_t a = a00 * (static_cast<uint32_t>(tx.w0) * ty.w0) +
+                                 a10 * (static_cast<uint32_t>(tx.w1) * ty.w0) +
+                                 a01 * (static_cast<uint32_t>(tx.w0) * ty.w1) +
+                                 a11 * (static_cast<uint32_t>(tx.w1) * ty.w1);
+                    rgba[(static_cast<size_t>(dy) * target_dim + dx) * 4u + 3u] = static_cast<uint8_t>((a + 32u) >> 6);
+                }
+            }
+        }
+    }
+
+    const uint32_t bx_cnt = target_dim / 4u;
+    const uint32_t by_cnt = target_dim / 4u;
+    for (uint32_t by = 0; by < by_cnt; ++by) {
+        uint8_t* dst_row = dst_slice + static_cast<size_t>(by) * d3d_row_pitch;
+        for (uint32_t bx = 0; bx < bx_cnt; ++bx) {
+            uint8_t blk_px[16][4];
+            for (uint32_t py = 0; py < 4u; ++py) {
+                const uint8_t* src_p = rgba.data() + (static_cast<size_t>(by * 4u + py) * target_dim + bx * 4u) * 4u;
+                std::memcpy(blk_px[py * 4u], src_p, 16u);
+            }
+            EncodeBlockBc7Mode6(blk_px, dst_row + static_cast<size_t>(bx) * 16u);
+        }
+    }
+    return true;
+}
+
+static void ReleaseHdTerrainSlotIfAny(int32_t slot_idx) {
+    uint8_t* prev_hd = g_HdTerrainTex[slot_idx];
+    if (prev_hd != nullptr) {
+        if (g_TerrainTexArrayPtr != nullptr && g_TerrainTexArrayPtr[slot_idx] == prev_hd) {
+            g_TerrainTexArrayPtr[slot_idx] = nullptr;
+        }
+        if (g_DestroyPooledTexture != nullptr) {
+            g_DestroyPooledTexture(prev_hd);
+        }
+        g_HdTerrainTex[slot_idx] = nullptr;
+        g_HdTerrainDim[slot_idx] = 0;
+    }
+}
+
+// Hook 11: UploadTerrainTextureArray (+0x18E940 in v1.0.2.1 / +0x18EFC0 in v2.0.0.1)
+//   Intercepts creation/upload of the native 64x64x1024 Texture2DArray in g_TerrainTexArray[16].
+//   When any of the 1024 map tiles match our registered hashes, builds a 256x256x1024 (or 128x128x1024
+//   fallback) BC7_UNORM Texture2DArray in Pool[0] combining fast pre-compiled DDS/PNG HD slices with
+//   bilinear-upscaled stock slices.
+static void __fastcall Hook_UploadTerrainTextureArray(
+    int32_t         slot_idx,
+    const uint32_t* clut_rgba,
+    const uint8_t*  tile_pixels
+) {
+    if (slot_idx < 0 || slot_idx >= 16 || !clut_rgba || !tile_pixels ||
+        !g_TerrainTexArrayPtr || !g_AllocatePooledTexture || !g_UploadTextureToGpu || !g_EngineMalloc) {
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    uint32_t pal[256]{};
+    uint16_t matched_slots[1024]{};
+    uint32_t matched_count = 0;
+    if (!SafePrepareTerrainUploadInputs(clut_rgba, tile_pixels, pal, matched_slots, &matched_count)) {
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    std::lock_guard<std::mutex> tlock(g_TerrainArrayMutex);
+
+    std::vector<std::string> tile_png_paths(1024);
+    if (matched_count > 0) {
+        std::lock_guard<std::mutex> lock(g_Mutex);
+        for (uint32_t t = 0; t < 1024u; ++t) {
+            uint16_t s = matched_slots[t];
+            if (s == 0) continue;
+            if (s < g_Slots.size() && !g_Slots[s].png_path.empty()) {
+                tile_png_paths[t] = g_Slots[s].png_path;
+            } else {
+                matched_slots[t] = 0;
+                --matched_count;
+            }
+        }
+    }
+
+    if (matched_count == 0) {
+        ReleaseHdTerrainSlotIfAny(slot_idx);
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    const uint64_t t0 = GetTickCount64();
+
+    uint32_t target_dim = 256u;
+    uint64_t slice_used = g_UploadOffPtr ? ((*g_UploadOffPtr) & 0x07FFFFFFULL) : 0ULL;
+    if (slice_used + 67108864ULL > 0x07FC0000ULL) {
+        target_dim = 128u;
+        if (slice_used + 16777216ULL > 0x07FC0000ULL) {
+            LogMsg("[ACZ_HDTex] [Terrain] WARNING: Upload ring slice nearly full (%llu MB used), falling back to stock 64x64.",
+                   static_cast<unsigned long long>(slice_used >> 20));
+            ReleaseHdTerrainSlotIfAny(slot_idx);
+            g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+            return;
+        }
+    }
+
+    if (g_HdTerrainTex[slot_idx] != nullptr && g_HdTerrainDim[slot_idx] != target_dim) {
+        ReleaseHdTerrainSlotIfAny(slot_idx);
+    }
+
+    uint8_t* hd_tex = g_HdTerrainTex[slot_idx];
+    if (hd_tex == nullptr) {
+        hd_tex = g_AllocatePooledTexture(target_dim, target_dim, 1024u, DXGI_FMT_BC7_UNORM, 0ull, nullptr);
+        if (hd_tex == nullptr && target_dim == 256u) {
+            target_dim = 128u;
+            hd_tex = g_AllocatePooledTexture(target_dim, target_dim, 1024u, DXGI_FMT_BC7_UNORM, 0ull, nullptr);
+        }
+        if (hd_tex == nullptr) {
+            LogMsg("[ACZ_HDTex] [Terrain] WARNING: AllocatePooledTexture(%ux%ux1024 BC7) failed for Slot %d, falling back to stock 64x64.",
+                   target_dim, target_dim, slot_idx);
+            g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+            return;
+        }
+    }
+
+    uint8_t* slot_hdr = *reinterpret_cast<uint8_t**>(hd_tex + 0x00);
+    if (!slot_hdr) {
+        LogMsg("[ACZ_HDTex] [Terrain] ERROR: Missing slot header for Slot %d, falling back to stock 64x64.", slot_idx);
+        ReleaseHdTerrainSlotIfAny(slot_idx);
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    const uint32_t d3d_total_bytes = *reinterpret_cast<uint32_t*>(slot_hdr + 0x08);
+    const uint32_t d3d_row_pitch   = *reinterpret_cast<uint32_t*>(hd_tex + 0x1C);
+    const uint32_t min_row_pitch   = (target_dim / 4u) * 16u;
+    const uint32_t slice_bytes     = (target_dim / 4u) * d3d_row_pitch;
+    if (d3d_row_pitch < min_row_pitch || static_cast<uint64_t>(slice_bytes) * 1024ULL > d3d_total_bytes) {
+        LogMsg("[ACZ_HDTex] [Terrain] ERROR: Invalid D3D12 layout (total=%u, row_pitch=%u) for Slot %d, falling back to stock 64x64.",
+               d3d_total_bytes, d3d_row_pitch, slot_idx);
+        if (hd_tex != g_HdTerrainTex[slot_idx] && g_DestroyPooledTexture != nullptr) {
+            g_DestroyPooledTexture(hd_tex);
+        } else {
+            ReleaseHdTerrainSlotIfAny(slot_idx);
+        }
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    uint8_t* cpu_buf = *reinterpret_cast<uint8_t**>(hd_tex + 0x08);
+    if (!cpu_buf) {
+        cpu_buf = static_cast<uint8_t*>(g_EngineMalloc(d3d_total_bytes));
+        *reinterpret_cast<uint8_t**>(hd_tex + 0x08) = cpu_buf;
+    }
+    if (!cpu_buf) {
+        LogMsg("[ACZ_HDTex] [Terrain] ERROR: EngineMalloc(%u) failed for Slot %d, falling back to stock 64x64.",
+               d3d_total_bytes, slot_idx);
+        if (hd_tex != g_HdTerrainTex[slot_idx] && g_DestroyPooledTexture != nullptr) {
+            g_DestroyPooledTexture(hd_tex);
+        } else {
+            ReleaseHdTerrainSlotIfAny(slot_idx);
+        }
+        g_OrigUploadTerrainTextureArray(slot_idx, clut_rgba, tile_pixels);
+        return;
+    }
+
+    TerrainBilinTap lut[256]{};
+    BuildTerrainBilinLut(target_dim, lut);
+
+    unsigned int hw_threads = std::thread::hardware_concurrency();
+    size_t num_threads = std::clamp<size_t>(hw_threads > 0 ? hw_threads : 4u, 1u, 8u);
+
+    std::atomic<uint32_t> next_tile{0};
+    std::atomic<uint32_t> fast_dds_cnt{0};
+    std::atomic<uint32_t> png_enc_cnt{0};
+    std::atomic<uint32_t> fallback_stock_cnt{0};
+
+    std::vector<std::thread> workers;
+    workers.reserve(num_threads);
+    for (size_t wi = 0; wi < num_threads; ++wi) {
+        workers.emplace_back([&]() {
+            HRESULT hr_com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            for (;;) {
+                uint32_t t = next_tile.fetch_add(1u, std::memory_order_relaxed);
+                if (t >= 1024u) break;
+
+                uint8_t*       dst_slice = cpu_buf + static_cast<size_t>(t) * slice_bytes;
+                const uint8_t* src_tile  = tile_pixels + static_cast<size_t>(t) * 4096u;
+                const std::string& png_path = tile_png_paths[t];
+
+                if (!png_path.empty()) {
+                    bool stock_has_alpha = false;
+                    for (size_t px = 0; px < 4096u; ++px) {
+                        if ((pal[src_tile[px]] >> 24) < 255u) {
+                            stock_has_alpha = true;
+                            break;
+                        }
+                    }
+                    if (!stock_has_alpha && TryLoadFastDdsTerrainSlice(png_path, target_dim, d3d_row_pitch, dst_slice)) {
+                        fast_dds_cnt.fetch_add(1u, std::memory_order_relaxed);
+                        continue;
+                    }
+                    if (TryEncodeHdPngTerrainSlice(png_path, src_tile, pal, stock_has_alpha, target_dim, d3d_row_pitch, lut, dst_slice)) {
+                        png_enc_cnt.fetch_add(1u, std::memory_order_relaxed);
+                        continue;
+                    }
+                    fallback_stock_cnt.fetch_add(1u, std::memory_order_relaxed);
+                }
+
+                EncodeStockTerrainTileSlice(src_tile, pal, target_dim, d3d_row_pitch, lut, dst_slice);
+            }
+            if (SUCCEEDED(hr_com)) {
+                CoUninitialize();
+            }
+        });
+    }
+    for (auto& th : workers) {
+        if (th.joinable()) th.join();
+    }
+
+    g_UploadTextureToGpu(hd_tex);
+
+    uint8_t* old_tex = g_TerrainTexArrayPtr[slot_idx];
+    g_TerrainTexArrayPtr[slot_idx] = hd_tex;
+    g_HdTerrainTex[slot_idx]       = hd_tex;
+    g_HdTerrainDim[slot_idx]       = target_dim;
+    if (old_tex != nullptr && old_tex != hd_tex && g_DestroyPooledTexture != nullptr) {
+        g_DestroyPooledTexture(old_tex);
+    }
+
+    uint32_t hd_done = fast_dds_cnt.load(std::memory_order_relaxed) + png_enc_cnt.load(std::memory_order_relaxed);
+    uint32_t stock_done = 1024u - hd_done;
+    uint64_t ring_used_now = g_UploadOffPtr ? ((*g_UploadOffPtr) & 0x07FFFFFFULL) : (slice_used + d3d_total_bytes);
+    uint64_t elapsed_ms = GetTickCount64() - t0;
+
+    LogMsg("[ACZ_HDTex] [Terrain] Slot %d: replaced %u/1024 tiles (%u fast DDS, %u alpha/PNG, %u stock upscaled%s) -> %ux%ux1024 BC7_UNORM (tex=%p, ring_used=%llu KB, %llu ms)",
+           slot_idx, hd_done,
+           fast_dds_cnt.load(std::memory_order_relaxed),
+           png_enc_cnt.load(std::memory_order_relaxed),
+           stock_done,
+           fallback_stock_cnt.load(std::memory_order_relaxed) > 0 ? ", PNG fallback occurred" : "",
+           target_dim, target_dim, hd_tex,
+           static_cast<unsigned long long>(ring_used_now >> 10),
+           static_cast<unsigned long long>(elapsed_ms));
+}
 
 // Hook 16: UploadTextureToGpu (+0x20DCF0 in v1.0.2.1 / +0x20E370 in v2.0.0.1)
 //   Serializes access to the engine's non-thread-safe D3D12 upload ring buffer
@@ -9196,6 +9843,29 @@ static void AutoResolveD3D12TextureCallTargets(const uint8_t* fn_base) {
     }
 }
 
+static void AutoResolveTerrainGlobals(const uint8_t* fn_upload_terrain, const uint8_t* fn_upload_to_gpu) {
+    __try {
+        if (fn_upload_terrain != nullptr &&
+            fn_upload_terrain[0x39] == 0x48 &&
+            fn_upload_terrain[0x3A] == 0x8D &&
+            fn_upload_terrain[0x3B] == 0x15) {
+            int32_t disp = *reinterpret_cast<const int32_t*>(fn_upload_terrain + 0x3C);
+            g_TerrainTexArrayPtr = reinterpret_cast<uint8_t**>(const_cast<uint8_t*>(fn_upload_terrain + 0x40 + disp));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    __try {
+        if (fn_upload_to_gpu != nullptr &&
+            fn_upload_to_gpu[0x6A] == 0x48 &&
+            fn_upload_to_gpu[0x6B] == 0x03 &&
+            fn_upload_to_gpu[0x6C] == 0x0D) {
+            int32_t disp = *reinterpret_cast<const int32_t*>(fn_upload_to_gpu + 0x6D);
+            g_UploadOffPtr = reinterpret_cast<uint64_t*>(const_cast<uint8_t*>(fn_upload_to_gpu + 0x71 + disp));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static void InstallControlsManualAndPadHooks() {
     FixDefaultDinputPovTypesStandaloneSEH(g_ExeBase);
     InstallDetour64(
@@ -9295,6 +9965,13 @@ static void InitializePlugin(const AczAddonApi* api) {
     );
     // Also auto-resolve exact call targets directly from CreateTextureFromPngMemory instructions:
     AutoResolveD3D12TextureCallTargets(reinterpret_cast<const uint8_t*>(g_CreateTextureFromPngMemory));
+
+    g_TerrainTexArrayPtr = reinterpret_cast<uint8_t**>(g_ExeBase + AczRva(RVA_TerrainTexArray));
+    g_UploadOffPtr       = reinterpret_cast<uint64_t*>(g_ExeBase + AczRva(RVA_UploadRingOffset));
+    AutoResolveTerrainGlobals(
+        reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_UploadTerrainTextureArray)),
+        reinterpret_cast<const uint8_t*>(g_UploadTextureToGpu)
+    );
 
     EnsureD3D12TexturePoolsExpanded();
     acz_installer::AutoInstallTexturePacksIfPresent(
@@ -9397,10 +10074,19 @@ static void InitializePlugin(const AczAddonApi* api) {
         reinterpret_cast<void**>(&g_OrigUploadTextureToGpu)
     );
 
+    bool ok11 = InstallDetour64(
+        "UploadTerrainTextureArray",
+        g_ExeBase + AczRva(RVA_UploadTerrainTextureArray),
+        PROLOGUE_UploadTerrainTextureArray,
+        sizeof(PROLOGUE_UploadTerrainTextureArray),
+        reinterpret_cast<const void*>(&Hook_UploadTerrainTextureArray),
+        reinterpret_cast<void**>(&g_OrigUploadTerrainTextureArray)
+    );
+
     InstallControlsManualAndPadHooks();
 
-    if (ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && ok7 && ok8 && ok9 && ok10) {
-        LogMsg("[ACZ_HDTex] All 10 texture & font hooks installed! Ready to replace GIM, FHM, TIM2/SWAD, Dynamic GameFont, Master Atlas, and .arc extratex textures.");
+    if (ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && ok7 && ok8 && ok9 && ok10 && ok11) {
+        LogMsg("[ACZ_HDTex] All 11 texture & font hooks installed! Ready to replace GIM, FHM, TIM2/SWAD, Dynamic GameFont, Master Atlas, .arc extratex, and native Terrain Texture2DArray.");
     } else {
         LogMsg("[ACZ_HDTex] WARNING: One or more texture hooks failed to install.");
     }

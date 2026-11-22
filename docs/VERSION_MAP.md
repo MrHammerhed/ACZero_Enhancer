@@ -59,6 +59,7 @@ Why did `.text` shift piecewise?
 | Symbol / Function | `1.0.2.1` RVA | `2.0.0.1` RVA | Shift | Prologue Bytes (8 B) |
 | :--- | :---: | :---: | :---: | :--- |
 | `BuildGimArrayGifPackets` | `0x0014CA50` | `0x0014CA90` | `+0x0040` | `48 89 6C 24 18 48 89 74` |
+| `UploadTerrainTextureArray` | `0x0018E940` | `0x0018EFC0` | `+0x0680` | `48 89 74 24 18 48 89 7C` |
 | `InvalidateGsVramRange` | `0x00190400` | `0x00190A80` | `+0x0680` | `40 55 56 41 56 48 8B EC` |
 | `BindOrUploadGsVramTexture` | `0x00191040` | `0x001916C0` | `+0x0680` | `40 55 53 56 57 41 54 41` |
 | `GsUploadVramBlock` | `0x00191A00` | `0x00192080` | `+0x0680` | `4C 8B DC 53 55 56 41 56` |
@@ -79,6 +80,7 @@ Why did `.text` shift piecewise?
 | `GlobalPs2GsVramPtr` (`.data`) | `0x0031CF18` | `0x0031FF18` | `+0x3000` | — |
 | `GlobalD3D12Context` (`.data`) | `0x0033AC70` | `0x0033DC90` | `+0x3020` | — |
 | `GlobalD3D12CmdList` (`.data`) | `0x0033ACE8` | `0x0033DD08` | `+0x3020` | — |
+| `GlobalTerrainTexArray` (`.data`) | `0x0033BC50` | `0x0033EC70` | `+0x3020` | — |
 | `GlobalUploadRingOffset` (`.data`)| `0x003567A8` | `0x003597C8` | `+0x3020` | — |
 
 ### 4.2. `memdump.dll` Hooks & Globals
@@ -89,6 +91,19 @@ Why did `.text` shift piecewise?
 | `IAT_PostQuitMessage` (`.rdata`) | `0x0027B6F0` | `0x0027D6E8` | `+0x1FF8` |
 | `GlobalD3D12SwapChain` (`.data`) | `0x0033DA48` | `0x00340A68` | `+0x3020` |
 
-### 4.3. `.rdata` Float Constants & Cave (`enhancer.cpp`)
+### 4.3. `enhancer.asi` FastStartup Hooks & Patches (`v0.24`)
+| Symbol / Patch Site | `1.0.2.1` RVA | `2.0.0.1` RVA | Shift |
+| :--- | :---: | :---: | :---: |
+| `AVInitMode::Update` (`CModePadManual` redirect) | `0x0016348B` | `0x001634CB` | `+0x0040` |
+| `CModeWakeMemorycard::Init` (post-save redirect) | `0x0017D513` | `0x0017D553` | `+0x0040` |
+| `CModeWakeLogo::Update` (press-to-skip hook) | `0x0017DC30` | `0x0017DC70` | `+0x0040` |
+| `CSelectMemorycard::modeLoad` (30-frame timer) | `0x001C2B27` | `0x001C31A7` | `+0x0680` |
+| `CSelectMemorycard::modeWake` (30-frame timer) | `0x001C3000` | `0x001C3680` | `+0x0680` |
+| `LauncherMountEArc` (`jne` -> `jmp`) | `0x00221BDA` | `0x00222D3F` | `+0x1165` |
+| `LauncherDialogBranch` (`jne` -> `jmp`) | `0x00221F31` | `0x002230F6` | `+0x11C5` |
+| `LauncherSetFlag` (`sete` -> `mov 1`) | `0x00223151` | `0x00224351` | `+0x1200` |
+| `SkipLauncherFlag` (`.data`) | `0x0032C939` | `0x0032F958` | `+0x301F` |
+
+### 4.4. `.rdata` Float Constants & Cave (`enhancer.cpp`)
 * **`.rdata` Float Constants (`0x2AC000 .. 0x2B9FFF`)**: Shifted by **`+0x2238`** in RVA (`2.0.0.1`). Because instructions in `.text [0x004E80 .. 0x18AD1F]` shifted by **`+0x0040`**, any RIP-relative `disp32` operand in that `.text` region addressing a float constant in `.rdata` increases by **`+0x21F8`** (`0x2238 - 0x0040`).
 * **`.rdata` Zero Cave**: `0x00308F00` (`1.0.2.1`) -> `0x0030B500` (`2.0.0.1`), a **`+0x2600`** RVA shift (or **`+0x25C0`** in RIP-relative `disp32` from `.text [+0x0040]`).

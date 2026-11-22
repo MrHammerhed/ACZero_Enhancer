@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Core Plugin
-// File: enhancer.cpp (v0.23.6 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker & DirectInput/XInput/KB Input Engine)
+// File: enhancer.cpp (v0.24 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker, FastStartup & DirectInput/XInput/KB Input Engine)
 // Build: Visual Studio 2026 / 2022 x64 (Release) -> enhancer.asi
 // Usage: Place enhancer.asi into "<GameDir>\mods\enhancer\enhancer.asi" (loaded by version.dll)
 //        Configuration is stored in "<GameDir>\mods\enhancer\enhancer.ini"
@@ -37,7 +37,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* ENHANCER_VERSION_STR = "v0.23.6";
+static constexpr const char* ENHANCER_VERSION_STR = "v0.24";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -122,10 +122,14 @@ static fs::path              g_EnhancerIniPath;
 
 // Configuration options loaded from mods\enhancer\enhancer.ini
 static bool                  g_EnableLogging                = true;
+static int                   g_FastStartup                  = 0;     // 0 = Off, 1 = Skip Launcher/PadManual + Press-to-Skip Logos->Title, 2 = Level 1 + Fast MemoryCard + Auto-Skip->Title, 3 = Level 2 + Auto-Skip->MainMenu
 static bool                  g_Unlock2PlayerCampaign        = false; // 0 = Single-Player (merge KB+Pad into P1, lock 2P), 1 = Split P1 Pad + P2 KB
 static bool                  g_EnableMenuOverrides          = true;
 static int                   g_MenuAspectMode               = 0;     // 0 = Auto, 1 = Force 16:9, 2 = Force 4:3, 3 = Force 21:9
 static int                   g_ScreenAspect                 = 1;     // 0 = 4:3, 1 = 16:9, 2 = 21:9 (Active aspect ratio; save file always writes 16:9)
+
+static std::atomic<uint16_t> g_LiveInputButtons{0};
+static std::atomic<int>      g_SuppressInputFramesAfterLogoSkip{0};
 
 static void SaveScreenAspectToIni(int aspect) {
     if (aspect < 0 || aspect > 2) return;
@@ -264,6 +268,28 @@ static bool PatchMemoryBytes(
     return true;
 }
 
+static bool PatchRawAddressBytes(
+    uintptr_t target_addr,
+    const uint8_t* patch_bytes,
+    size_t len,
+    const uint8_t* expected_orig = nullptr
+) {
+    if (!target_addr || !patch_bytes || len == 0) return false;
+    if (expected_orig != nullptr) {
+        if (std::memcmp(reinterpret_cast<const void*>(target_addr), expected_orig, len) != 0) {
+            return false;
+        }
+    }
+    DWORD old_protect = 0;
+    if (!VirtualProtect(reinterpret_cast<void*>(target_addr), len, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return false;
+    }
+    std::memcpy(reinterpret_cast<void*>(target_addr), patch_bytes, len);
+    VirtualProtect(reinterpret_cast<void*>(target_addr), len, old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target_addr), len);
+    return true;
+}
+
 // ----------------------------------------------------------------------------
 // Load mods\enhancer\enhancer.ini Configuration
 // ----------------------------------------------------------------------------
@@ -294,6 +320,12 @@ static void LoadEnhancerConfigIni() {
                 "[Enhancer]\n"
                 "; EnableLogging: Write [Enhancer] events directly into mods\\enhancer\\enhancer.log (1 = Yes, 0 = No)\n"
                 "EnableLogging=1\n\n"
+                "; FastStartup: Multi-stage startup acceleration mode (default: 0):\n"
+                ";   0 = Disabled (vanilla startup flow)\n"
+                ";   1 = Skip native launcher & pad manual screen; press any button during intro logos to jump directly to Title Screen\n"
+                ";   2 = Level 1 + remove 2x30-frame Memory Card UI delays & auto-skip intro logos directly to Title Screen\n"
+                ";   3 = Level 2 + auto-skip Title Screen directly to Main Menu\n"
+                "FastStartup=0\n\n"
                 "; EnableMenuOverrides: Load custom 16:9 / 21:9 widescreen menu layouts from mods\\textures\\menus\\ (1 = Yes, 0 = No)\n"
                 "EnableMenuOverrides=1\n\n"
                 "; MenuAspectMode: Widescreen menu aspect mode (0 = Auto from game Screen Size, 1 = Force 16:9, 2 = Force 4:3, 3 = Force 21:9)\n"
@@ -317,6 +349,7 @@ static void LoadEnhancerConfigIni() {
     }
 
     g_EnableLogging         = ReadEnhancerIniInt("EnableLogging",         1) != 0;
+    g_FastStartup           = std::clamp(ReadEnhancerIniInt("FastStartup", 0), 0, 3);
     g_Unlock2PlayerCampaign = ReadEnhancerIniInt("Unlock2PlayerCampaign", 0) != 0;
 
     // Read Widescreen Menu Override settings from enhancer.ini (with fallback to acz_hdtex.ini for compatibility)
@@ -594,33 +627,43 @@ static fs::path                     g_TexturesDir;
 using FnAczHdTexGetTim2AspectMask            = uint8_t (__fastcall*)(const uint8_t* tim2_base, uint32_t tim2_size);
 using FnAczHdTexResolveGimDescriptorTier     = int     (__fastcall*)(uint8_t* gim_desc, const char* caller_tag);
 using FnAczHdTexGetActiveTextureAspectTier   = int     (__fastcall*)();
+using FnAczHdTexNotifyInputPolled            = void    (__fastcall*)(const uint8_t* pad_st, const uint8_t* kb_st, uintptr_t pad_dev);
 
 static FnAczHdTexGetTim2AspectMask          g_BridgeGetTim2AspectMask        = nullptr;
 static FnAczHdTexResolveGimDescriptorTier   g_BridgeResolveGimAspectTier     = nullptr;
 static FnAczHdTexGetActiveTextureAspectTier g_BridgeGetActiveTexAspectTier   = nullptr;
+static FnAczHdTexNotifyInputPolled          g_BridgeNotifyInputPolled        = nullptr;
+static bool                                 g_HdTexBridgeResolved            = false;
 
 static void ResolveHdTexBridgeIfNeeded() {
-    if (g_BridgeGetTim2AspectMask != nullptr && g_BridgeResolveGimAspectTier != nullptr) {
+    if (g_HdTexBridgeResolved) {
         return;
     }
-    HMODULE hMod = GetModuleHandleA("acz_hdtex.dll");
-    if (!hMod) hMod = GetModuleHandleA("acz_hdtex.asi");
+    HMODULE hMod = GetModuleHandleA("acz_hdtex.asi");
+    if (!hMod) hMod = GetModuleHandleA("acz_hdtex.dll");
     if (!hMod) return;
 
-    if (!g_BridgeGetTim2AspectMask) {
-        g_BridgeGetTim2AspectMask = reinterpret_cast<FnAczHdTexGetTim2AspectMask>(
-            GetProcAddress(hMod, "AczHdTex_GetTim2AspectMask")
-        );
+    g_BridgeGetTim2AspectMask = reinterpret_cast<FnAczHdTexGetTim2AspectMask>(
+        GetProcAddress(hMod, "AczHdTex_GetTim2AspectMask")
+    );
+    g_BridgeResolveGimAspectTier = reinterpret_cast<FnAczHdTexResolveGimDescriptorTier>(
+        GetProcAddress(hMod, "AczHdTex_ResolveGimDescriptorAspectTier")
+    );
+    g_BridgeGetActiveTexAspectTier = reinterpret_cast<FnAczHdTexGetActiveTextureAspectTier>(
+        GetProcAddress(hMod, "AczHdTex_GetActiveTextureAspectTier")
+    );
+    g_BridgeNotifyInputPolled = reinterpret_cast<FnAczHdTexNotifyInputPolled>(
+        GetProcAddress(hMod, "AczHdTex_NotifyInputPolled")
+    );
+    g_HdTexBridgeResolved = true;
+}
+
+static void NotifyHdTexInputPolled(const uint8_t* pad_st, const uint8_t* kb_st, uintptr_t pad_dev) {
+    if (!g_HdTexBridgeResolved) {
+        ResolveHdTexBridgeIfNeeded();
     }
-    if (!g_BridgeResolveGimAspectTier) {
-        g_BridgeResolveGimAspectTier = reinterpret_cast<FnAczHdTexResolveGimDescriptorTier>(
-            GetProcAddress(hMod, "AczHdTex_ResolveGimDescriptorAspectTier")
-        );
-    }
-    if (!g_BridgeGetActiveTexAspectTier) {
-        g_BridgeGetActiveTexAspectTier = reinterpret_cast<FnAczHdTexGetActiveTextureAspectTier>(
-            GetProcAddress(hMod, "AczHdTex_GetActiveTextureAspectTier")
-        );
+    if (g_BridgeNotifyInputPolled != nullptr) {
+        g_BridgeNotifyInputPolled(pad_st, kb_st, pad_dev);
     }
 }
 
@@ -3713,6 +3756,10 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
                 }
             }
 
+            // Notify acz_hdtex.asi BEFORE merging st1 (Keyboard) into st0 (Gamepad) so live
+            // Gamepad/KB glyph auto-switching (GamepadGlyphs=AUTO) sees unmerged device states!
+            NotifyHdTexInputPolled(pad_st, kb_st, pad_dev);
+
             // Handle Single-Player Seamless Merge vs Unlocked 2-Player Separate Controls:
             if (cfg_ctrl2 == ~0ULL && type0 != 0xFFFFFFFFu && type1 != 0xFFFFFFFFu && type0 != type1) {
                 uint8_t* st0 = state_array + 0x00u;
@@ -3758,6 +3805,18 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
                     *reinterpret_cast<uint32_t*>(slot1 + 0x04u) = 0u;
                 }
             }
+        }
+
+        // Capture live merged button mask for FastStartup=1 press-to-skip logos,
+        // and briefly suppress input immediately after skipping so CModeTitle doesn't auto-advance.
+        uint16_t live_btns = *reinterpret_cast<const uint16_t*>(state_array + 0x28u) |
+                             *reinterpret_cast<const uint16_t*>(state_array + 0x58u);
+        g_LiveInputButtons.store(live_btns, std::memory_order_relaxed);
+        int suppress_cnt = g_SuppressInputFramesAfterLogoSkip.load(std::memory_order_relaxed);
+        if (suppress_cnt > 0) {
+            g_SuppressInputFramesAfterLogoSkip.store(suppress_cnt - 1, std::memory_order_relaxed);
+            *reinterpret_cast<uint16_t*>(state_array + 0x28u) = 0u;
+            *reinterpret_cast<uint16_t*>(state_array + 0x58u) = 0u;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -4115,6 +4174,176 @@ void InstallWidescreenAndUiHooks() {
 }
 
 
+// ----------------------------------------------------------------------------
+// Fast Startup Engine (FastStartup = 0 | 1 | 2 | 3)
+//   0 = Disabled (vanilla startup flow)
+//   1 = Skip native launcher & pad manual; press any button during intro logos -> Title Screen (CModeTitle)
+//   2 = Level 1 + remove 2x30-frame CSelectMemorycard delays & auto-skip logos -> Title Screen (CModeTitle)
+//   3 = Level 2 + auto-skip logos & Title Screen -> Main Menu (CModeMainSelect)
+// ----------------------------------------------------------------------------
+static constexpr uintptr_t RVA_CModeWakeLogoUpdate = 0x0017DC30; // +0x17DC30 (v1.0.2.1) / +0x17DC70 (v2.0.0.1)
+static const uint8_t PROLOGUE_CModeWakeLogoUpdate[16] = {
+    0x40, 0x53,                                     // push rbx
+    0x48, 0x83, 0xEC, 0x30,                         // sub rsp, 30h
+    0x44, 0x8B, 0x81, 0x90, 0x00, 0x00, 0x00,       // mov r8d, [rcx+90h]
+    0x48, 0x8B, 0xD9                                // mov rbx, rcx
+};
+
+using FnCModeWakeLogoUpdate = void (__fastcall*)(uint8_t* this_ptr, void* mode_mgr);
+static FnCModeWakeLogoUpdate g_OrigCModeWakeLogoUpdate = nullptr;
+
+static uint8_t PollWakeLogoSkipKeyboardMask() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return 0u;
+    DWORD fg_pid = 0;
+    GetWindowThreadProcessId(fg, &fg_pid);
+    if (fg_pid != GetCurrentProcessId()) return 0u;
+
+    uint8_t mask = 0u;
+    if ((GetAsyncKeyState(VK_RETURN) & 0x8000) != 0) mask |= 0x01u;
+    if ((GetAsyncKeyState(VK_SPACE)  & 0x8000) != 0) mask |= 0x02u;
+    if ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0) mask |= 0x04u;
+    return mask;
+}
+
+static void __fastcall Hook_CModeWakeLogoUpdate(uint8_t* this_ptr, void* mode_mgr) {
+    if (this_ptr != nullptr && g_FastStartup == 1) {
+        static uint16_t s_prev_btns = 0u;
+        static uint8_t  s_prev_kb   = 0u;
+        static bool     s_armed     = false;
+
+        int32_t state = *reinterpret_cast<const int32_t*>(this_ptr + 0x90u);
+        uint16_t cur_btns = g_LiveInputButtons.load(std::memory_order_relaxed);
+        if (g_OrigPollAllInputDevices == nullptr && g_ExeBase != 0) {
+            cur_btns = *reinterpret_cast<const uint16_t*>(g_ExeBase + AczRva(0x33ABE0u) + 0x28u);
+        }
+        uint8_t  cur_kb   = PollWakeLogoSkipKeyboardMask();
+
+        if (state == 0) {
+            s_prev_btns = cur_btns;
+            s_prev_kb   = cur_kb;
+            s_armed     = true;
+        } else if (state == 1) {
+            if (!s_armed) {
+                s_prev_btns = cur_btns;
+                s_prev_kb   = cur_kb;
+                s_armed     = true;
+            } else {
+                const bool pad_pressed = (static_cast<uint16_t>(cur_btns & ~s_prev_btns) != 0u);
+                const bool kb_pressed  = (static_cast<uint8_t>(cur_kb & ~s_prev_kb) != 0u);
+                s_prev_btns = cur_btns;
+                s_prev_kb   = cur_kb;
+
+                if (pad_pressed || kb_pressed) {
+                    *reinterpret_cast<int32_t*>(this_ptr + 0x90u) = 2; // Finish CModeWakeLogo cleanly -> CModeTitle
+                    g_SuppressInputFramesAfterLogoSkip.store(6, std::memory_order_relaxed);
+                    s_armed = false;
+                    LogMsg("[Enhancer] [FastStartup] Intro logos skipped by user input -> transitioning to Title Screen (CModeTitle).");
+                }
+            }
+        } else {
+            s_armed = false;
+        }
+    }
+
+    if (g_OrigCModeWakeLogoUpdate != nullptr) {
+        g_OrigCModeWakeLogoUpdate(this_ptr, mode_mgr);
+    }
+}
+
+static bool ApplyFastStartupPatches() {
+    if (g_ExeBase == 0 || g_FastStartup <= 0) return false;
+    static bool s_fast_startup_applied = false;
+    if (s_fast_startup_applied) return true;
+
+    // 1. Level >= 1: Bypass native launcher (e.arc mount + dialog + setting.ini SkipLauncher flag)
+    bool ok_launcher = false;
+    if (g_AczVersion == AczExeVersion::V2_0_0_1) {
+        static const uint8_t orig_sete_v2[7]  = { 0x0F, 0x94, 0x05, 0x00, 0xB6, 0x10, 0x00 };
+        static const uint8_t patch_sete_v2[7] = { 0xC6, 0x05, 0x00, 0xB6, 0x10, 0x00, 0x01 };
+        static const uint8_t orig_earc_v2[6]  = { 0x0F, 0x85, 0x32, 0x01, 0x00, 0x00 };
+        static const uint8_t patch_earc_v2[6] = { 0xE9, 0x33, 0x01, 0x00, 0x00, 0x90 };
+        static const uint8_t orig_dlg_v2[6]   = { 0x0F, 0x85, 0x56, 0x01, 0x00, 0x00 };
+        static const uint8_t patch_dlg_v2[6]  = { 0xE9, 0x57, 0x01, 0x00, 0x00, 0x90 };
+        const uint8_t one = 1u;
+        PatchRawAddressBytes(g_ExeBase + 0x32F958u, &one, 1, nullptr);
+        bool ok1 = PatchRawAddressBytes(g_ExeBase + 0x224351u, patch_sete_v2, 7, orig_sete_v2);
+        bool ok2 = PatchRawAddressBytes(g_ExeBase + 0x222D3Fu, patch_earc_v2, 6, orig_earc_v2);
+        bool ok3 = PatchRawAddressBytes(g_ExeBase + 0x2230F6u, patch_dlg_v2,  6, orig_dlg_v2);
+        ok_launcher = (ok1 || ok2 || ok3);
+    } else {
+        static const uint8_t orig_sete_v1[7]  = { 0x0F, 0x94, 0x05, 0xE1, 0x97, 0x10, 0x00 };
+        static const uint8_t patch_sete_v1[7] = { 0xC6, 0x05, 0xE1, 0x97, 0x10, 0x00, 0x01 };
+        static const uint8_t orig_earc_v1[6]  = { 0x0F, 0x85, 0xDB, 0x00, 0x00, 0x00 };
+        static const uint8_t patch_earc_v1[6] = { 0xE9, 0xDC, 0x00, 0x00, 0x00, 0x90 };
+        static const uint8_t orig_dlg_v1[6]   = { 0x0F, 0x85, 0x3B, 0x01, 0x00, 0x00 };
+        static const uint8_t patch_dlg_v1[6]  = { 0xE9, 0x3C, 0x01, 0x00, 0x00, 0x90 };
+        const uint8_t one = 1u;
+        PatchRawAddressBytes(g_ExeBase + 0x32C939u, &one, 1, nullptr);
+        bool ok1 = PatchRawAddressBytes(g_ExeBase + 0x223151u, patch_sete_v1, 7, orig_sete_v1);
+        bool ok2 = PatchRawAddressBytes(g_ExeBase + 0x221BDAu, patch_earc_v1, 6, orig_earc_v1);
+        bool ok3 = PatchRawAddressBytes(g_ExeBase + 0x221F31u, patch_dlg_v1,  6, orig_dlg_v1);
+        ok_launcher = (ok1 || ok2 || ok3);
+    }
+
+    // 2. Level >= 1: Skip Controller Manual screen (CModePadManual) before save data load:
+    //    In AVInitMode::Update (RVA 0x16348B in v1.0.2.1 / 0x1634CB in v2.0.0.1), redirect next mode factory
+    //    from CModePadManual (0x178190 / 0x1781D0) directly to CModeWakeMemorycard (0x1781D0 / 0x178210).
+    static const uint8_t orig_pad_manual[7] = { 0x48, 0x8D, 0x05, 0xFE, 0x4C, 0x01, 0x00 };
+    static const uint8_t patch_wake_mem[7]  = { 0x48, 0x8D, 0x05, 0x3E, 0x4D, 0x01, 0x00 };
+    bool ok_pad = PatchRawAddressBytes(g_ExeBase + AczRva(0x16348Bu), patch_wake_mem, 7, orig_pad_manual);
+
+    // 3. Level >= 2: Remove 2x30-frame artificial UI timers in CSelectMemorycard (modeWake +0x1C3000 & modeLoad +0x1C2B27)
+    bool ok_mc_fast = false;
+    if (g_FastStartup >= 2) {
+        static const uint8_t orig_mc_wake[7]  = { 0xC7, 0x41, 0x18, 0x1E, 0x00, 0x00, 0x00 };
+        static const uint8_t patch_mc_wake[7] = { 0xC7, 0x41, 0x18, 0x00, 0x00, 0x00, 0x00 };
+        static const uint8_t orig_mc_load[7]  = { 0xC7, 0x41, 0x1C, 0x1E, 0x00, 0x00, 0x00 };
+        static const uint8_t patch_mc_load[7] = { 0xC7, 0x41, 0x1C, 0x00, 0x00, 0x00, 0x00 };
+        bool ok_w = PatchRawAddressBytes(g_ExeBase + AczRva(0x1C3000u), patch_mc_wake, 7, orig_mc_wake);
+        bool ok_l = PatchRawAddressBytes(g_ExeBase + AczRva(0x1C2B27u), patch_mc_load, 7, orig_mc_load);
+        ok_mc_fast = (ok_w || ok_l);
+    }
+
+    // 4. Post-save intro handling by FastStartup level:
+    //    - Level 1: Keep CModeWakeLogo but hook CModeWakeLogo::Update (+0x17DC30) for press-to-skip -> CModeTitle
+    //    - Level 2: Redirect CModeWakeMemorycard::Init (+0x17D513) directly to CModeTitle (+0x1782B0)
+    //    - Level 3: Redirect CModeWakeMemorycard::Init (+0x17D513) directly to CModeMainSelect (+0x178330)
+    bool ok_logo_hook = false;
+    bool ok_post_save = false;
+    if (g_FastStartup == 1) {
+        ok_logo_hook = InstallDetour64(
+            "CModeWakeLogo::Update",
+            g_ExeBase + AczRva(RVA_CModeWakeLogoUpdate),
+            PROLOGUE_CModeWakeLogoUpdate,
+            sizeof(PROLOGUE_CModeWakeLogoUpdate),
+            reinterpret_cast<const void*>(&Hook_CModeWakeLogoUpdate),
+            reinterpret_cast<void**>(&g_OrigCModeWakeLogoUpdate)
+        );
+    } else if (g_FastStartup == 2) {
+        static const uint8_t orig_wake_logo[7]  = { 0x48, 0x8D, 0x0D, 0x16, 0xAD, 0xFF, 0xFF };
+        static const uint8_t patch_title_scr[7] = { 0x48, 0x8D, 0x0D, 0x96, 0xAD, 0xFF, 0xFF };
+        ok_post_save = PatchRawAddressBytes(g_ExeBase + AczRva(0x17D513u), patch_title_scr, 7, orig_wake_logo);
+    } else if (g_FastStartup >= 3) {
+        static const uint8_t orig_wake_logo[7]  = { 0x48, 0x8D, 0x0D, 0x16, 0xAD, 0xFF, 0xFF };
+        static const uint8_t patch_main_menu[7] = { 0x48, 0x8D, 0x0D, 0x16, 0xAE, 0xFF, 0xFF };
+        ok_post_save = PatchRawAddressBytes(g_ExeBase + AczRva(0x17D513u), patch_main_menu, 7, orig_wake_logo);
+    }
+
+    if (ok_launcher || ok_pad || ok_mc_fast || ok_logo_hook || ok_post_save) {
+        s_fast_startup_applied = true;
+        LogMsg("[Enhancer] [FastStartup] Level=%d active (SkipLauncher=%d, SkipPadManual=%d, FastMemoryCard=%d, PressToSkipLogos=%d, AutoSkipPostSave=%d).",
+               g_FastStartup,
+               ok_launcher ? 1 : 0,
+               ok_pad ? 1 : 0,
+               ok_mc_fast ? 1 : 0,
+               ok_logo_hook ? 1 : 0,
+               ok_post_save ? 1 : 0);
+        return true;
+    }
+    return false;
+}
+
 static void ApplyEnhancerPatchesAndHooks() {
     if (g_ExeBase == 0) return;
 
@@ -4188,7 +4417,12 @@ static void ApplyEnhancerPatchesAndHooks() {
         }
     }
 
-    // 3. Install Widescreen 16:9 / 21:9 Menus, HUD, Radio/Cutscene Subtitles, Debriefing, Video, 3D FOV & Input hooks
+    // 3. Apply Fast Startup patches & hooks (if FastStartup > 0)
+    if (g_FastStartup > 0) {
+        ApplyFastStartupPatches();
+    }
+
+    // 4. Install Widescreen 16:9 / 21:9 Menus, HUD, Radio/Cutscene Subtitles, Debriefing, Video, 3D FOV & Input hooks
     InstallWidescreenAndUiHooks();
 }
 
@@ -4204,8 +4438,15 @@ extern "C" __declspec(dllexport) void __fastcall AczEnhancer_WriteStateSummary(c
     const int aspect_opt = GetGameAspectOption();
     const char* aspect_str = (aspect_opt == 2) ? "21:9 (Ultrawide)" : ((aspect_opt == 1) ? "16:9 (Widescreen)" : "4:3 (Standard)");
 
+    const char* fast_str =
+        (g_FastStartup == 1) ? "LEVEL 1 (Skip Launcher/PadManual + Press-to-Skip Logos -> Title)" :
+        (g_FastStartup == 2) ? "LEVEL 2 (Level 1 + Fast MemoryCard + Auto-Skip Logos -> Title)" :
+        (g_FastStartup >= 3) ? "LEVEL 3 (Level 2 + Auto-Skip Logos & Title -> MainSelect)" :
+                               "DISABLED (0)";
+
     fprintf(rf, "--------------------------------------------------------------------------------\n");
-    fprintf(rf, "ACZERO ENHANCER (enhancer.dll %s) ACTIVE STATE:\n", ENHANCER_VERSION_STR);
+    fprintf(rf, "ACZERO ENHANCER (enhancer.asi %s) ACTIVE STATE:\n", ENHANCER_VERSION_STR);
+    fprintf(rf, "  FastStartup:             %s\n", fast_str);
     fprintf(rf, "  EnableMenuOverrides:     %s (MenuAspectMode: %d)\n",
             g_EnableMenuOverrides ? "ENABLED" : "DISABLED", g_MenuAspectMode);
     fprintf(rf, "  Active Screen Aspect:    %s (option=%d)\n", aspect_str, aspect_opt);
@@ -4253,8 +4494,9 @@ static void InitializeEnhancerPlugin(const AczAddonApi* api) {
     LogMsg("[Enhancer] Game executable base: %p (Detected version: %s)",
            reinterpret_cast<void*>(g_ExeBase), GetAczExeVersionString(g_AczVersion));
     LogMsg("[Enhancer] Config file:          %s", g_EnhancerIniPath.string().c_str());
-    LogMsg("[Enhancer] Config: EnableLogging=%d, EnableMenuOverrides=%d, MenuAspectMode=%d, Unlock2PlayerCampaign=%d, ScreenAspect=%d",
+    LogMsg("[Enhancer] Config: EnableLogging=%d, FastStartup=%d, EnableMenuOverrides=%d, MenuAspectMode=%d, Unlock2PlayerCampaign=%d, ScreenAspect=%d",
            g_EnableLogging ? 1 : 0,
+           g_FastStartup,
            g_EnableMenuOverrides ? 1 : 0,
            g_MenuAspectMode,
            g_Unlock2PlayerCampaign ? 1 : 0,
