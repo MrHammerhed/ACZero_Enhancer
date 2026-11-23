@@ -1,4 +1,4 @@
-# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.24.1)
+# ACZero Enhancer — Widescreen 16:9/21:9, DrawDistance, HD Texture, Font & Input Suite (v0.25)
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](https://microsoft.com/windows)
@@ -34,7 +34,9 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ## Key Components
 
-### 1. `enhancer.asi` — Widescreen 16:9/21:9, HUD, Subtitles, Input, FastStartup & 60 FPS Engine (v0.24.1)
+### 1. `enhancer.asi` — Widescreen 16:9/21:9, DrawDistance, RadialFog, HUD, Subtitles, Input, FastStartup & 60 FPS Engine (v0.25)
+* **Spherical Radial Fog (`[DrawDistance] RadialFog = 1 | 0` in `enhancer.ini`, default `1`)**: Replaces vanilla planar Z-depth fog with true 3D spherical distance in `DrawMesh_g` (terrain), `DrawACM_v` (3D models), and `DrawTree_v` (trees) via a version-independent D3D12 PSO shader override, eliminating geometry pop-in at screen corners when rotating the camera (active in both vanilla and `DrawDistance` modes across 4:3, 16:9, and 21:9).
+* **Unified Extended Draw Distance (`[DrawDistance] DrawDistance = 0 | 1` in `enhancer.ini`, default `0`)**: Expands visibility to a clean, artifact-free `2x` horizon with a 19x19 coarse terrain grid, automatic O(1) procedural mirrored-fractal out-of-bounds terrain extension, 60 FPS high-altitude terrain LOD, 524,288 WRAP cloud shadow map, skybox-safe `FarZ`, and universal stage support across Campaign, Free Flight, Free Mission, Gauntlet, VS Mode (`v01a`–`v08a`), 2P Co-Op, and cutscenes.
 * **Configurable Multi-Stage Fast Startup (`FastStartup = 0 | 1 | 2 | 3` in `enhancer.ini`, default `0`)**:
   * `0` — Disabled (vanilla startup).
   * `1` — Bypasses the native launcher (`e.arc` / dialog) and controller manual screen (`CModePadManual`), and lets you press any gamepad or keyboard button during intro logos (`CModeWakeLogo`) to jump straight to the Title Screen (`CModeTitle`).

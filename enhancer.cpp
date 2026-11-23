@@ -1,6 +1,6 @@
 // ============================================================================
 // Ace Combat Zero: The Belkan War (PC Port) — ACZero Enhancer Core Plugin
-// File: enhancer.cpp (v0.24 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker, FastStartup & DirectInput/XInput/KB Input Engine)
+// File: enhancer.cpp (v0.25 — Widescreen 16:9 & 21:9 Menus/HUD/Subtitles, 21:9 3D FOV, 60 FPS Unlocker, FastStartup, DrawDistance, RadialFog & DirectInput/XInput/KB Input Engine)
 // Build: Visual Studio 2026 / 2022 x64 (Release) -> enhancer.asi
 // Usage: Place enhancer.asi into "<GameDir>\mods\enhancer\enhancer.asi" (loaded by version.dll)
 //        Configuration is stored in "<GameDir>\mods\enhancer\enhancer.ini"
@@ -32,12 +32,15 @@
 
 #pragma comment(lib, "user32.lib")
 
+#include "acz_radial_fog_shaders.h"
+#include "acz_draw_distance.h"
+
 namespace fs = std::filesystem;
 
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* ENHANCER_VERSION_STR = "v0.24.1";
+static constexpr const char* ENHANCER_VERSION_STR = "v0.25";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -127,6 +130,8 @@ static bool                  g_Unlock2PlayerCampaign        = false; // 0 = Sing
 static bool                  g_EnableMenuOverrides          = true;
 static int                   g_MenuAspectMode               = 0;     // 0 = Auto, 1 = Force 16:9, 2 = Force 4:3, 3 = Force 21:9
 static int                   g_ScreenAspect                 = 1;     // 0 = 4:3, 1 = 16:9, 2 = 21:9 (Active aspect ratio; save file always writes 16:9)
+static bool                  g_DrawDistance                 = false; // 0 = Disabled (vanilla, default), 1 = Maximum Realism 4x DrawDistance + OOB Terrain
+static bool                  g_RadialFog                    = true;  // 1 = Spherical radial fog (default; active in both vanilla and DrawDistance modes), 0 = Vanilla planar Z fog
 
 static std::atomic<uint16_t> g_LiveInputButtons{0};
 static std::atomic<int>      g_SuppressInputFramesAfterLogoSkip{0};
@@ -248,9 +253,33 @@ static bool PatchMemoryBytes(
     size_t len,
     const uint8_t* expected_orig = nullptr
 ) {
+    uintptr_t rva_1021 = 0;
     if (g_ExeBase != 0 && target_addr > g_ExeBase && target_addr < g_ExeBase + 0x03850000u) {
-        uintptr_t rva_1021 = target_addr - g_ExeBase;
+        rva_1021 = target_addr - g_ExeBase;
         target_addr = g_ExeBase + AczRva(rva_1021);
+    }
+    uint8_t adj_new[16] = {};
+    uint8_t adj_orig[16] = {};
+    if (g_AczVersion == AczExeVersion::V2_0_0_1 && len <= sizeof(adj_new) && patch_bytes != nullptr) {
+        if (len == 4 && expected_orig != nullptr &&
+            (rva_1021 == 0x07B31Du || rva_1021 == 0x0D28A6u)) {
+            int32_t od = *reinterpret_cast<const int32_t*>(expected_orig) + 0x21F8;
+            int32_t nd = *reinterpret_cast<const int32_t*>(patch_bytes) + 0x25C0;
+            std::memcpy(adj_orig, &od, 4);
+            std::memcpy(adj_new,  &nd, 4);
+            expected_orig = adj_orig;
+            patch_bytes   = adj_new;
+        } else if (len == 12 && expected_orig != nullptr &&
+                   (rva_1021 == 0x07DA04u || rva_1021 == 0x07DA3Cu)) {
+            std::memcpy(adj_orig, expected_orig, 12);
+            std::memcpy(adj_new,  patch_bytes,   12);
+            int32_t od = *reinterpret_cast<const int32_t*>(adj_orig + 8) + 0x21F8;
+            int32_t nd = *reinterpret_cast<const int32_t*>(adj_new  + 8) + 0x21F8;
+            std::memcpy(adj_orig + 8, &od, 4);
+            std::memcpy(adj_new  + 8, &nd, 4);
+            expected_orig = adj_orig;
+            patch_bytes   = adj_new;
+        }
     }
     if (!target_addr || !patch_bytes || len == 0) return false;
     if (expected_orig != nullptr) {
@@ -297,6 +326,8 @@ static int ReadEnhancerIniInt(const char* key, int default_val) {
     const std::string ini_str = g_EnhancerIniPath.string();
     int val = GetPrivateProfileIntA("Enhancer", key, -99999, ini_str.c_str());
     if (val != -99999) return val;
+    val = GetPrivateProfileIntA("DrawDistance", key, -99999, ini_str.c_str());
+    if (val != -99999) return val;
     val = GetPrivateProfileIntA("Settings", key, -99999, ini_str.c_str());
     if (val != -99999) return val;
     val = GetPrivateProfileIntA("General", key, -99999, ini_str.c_str());
@@ -334,6 +365,17 @@ static void LoadEnhancerConfigIni() {
                 ";   0 = Single-Player mode (merges Gamepad and Keyboard into Player 1; keeps 2P NEW GAME & VS MODE locked)\n"
                 ";   1 = Two-Player mode (unlocks 2P NEW GAME & VS MODE; Player 1 = Gamepad, Player 2 = Keyboard)\n"
                 "Unlock2PlayerCampaign=0\n\n"
+                "[DrawDistance]\n"
+                "; DrawDistance: Unified extended draw distance mode (2x artifact-free horizon, 19x19 terrain grid,\n"
+                ";   automatic procedural OOB terrain extension, 524km WRAP cloud shadows, 60 FPS terrain LOD & universal stage support):\n"
+                ";   0 = Disabled (vanilla draw distance, default)\n"
+                ";   1 = Enabled\n"
+                "DrawDistance=0\n\n"
+                "; RadialFog: Spherical (circular) fog distance replacing vanilla planar Z fog so terrain, buildings, and trees\n"
+                ";   never pop in at screen corners when rotating the camera (active in both vanilla and DrawDistance modes):\n"
+                ";   1 = Enabled (default)\n"
+                ";   0 = Disabled (vanilla planar Z fog)\n"
+                "RadialFog=1\n\n"
                 "[Widescreen]\n"
                 "; ScreenAspect: Active aspect ratio stored independently of the save file (100%% save-safe):\n"
                 ";   0 = 4:3 Standard\n"
@@ -351,6 +393,8 @@ static void LoadEnhancerConfigIni() {
     g_EnableLogging         = ReadEnhancerIniInt("EnableLogging",         1) != 0;
     g_FastStartup           = std::clamp(ReadEnhancerIniInt("FastStartup", 0), 0, 3);
     g_Unlock2PlayerCampaign = ReadEnhancerIniInt("Unlock2PlayerCampaign", 0) != 0;
+    g_DrawDistance          = ReadEnhancerIniInt("DrawDistance",          0) != 0;
+    g_RadialFog             = ReadEnhancerIniInt("RadialFog",             1) != 0;
 
     // Read Widescreen Menu Override settings from enhancer.ini (with fallback to acz_hdtex.ini for compatibility)
     fs::path hd_ini = g_EnhancerDir / "acz_hdtex.ini";
@@ -4422,8 +4466,31 @@ static void ApplyEnhancerPatchesAndHooks() {
         ApplyFastStartupPatches();
     }
 
-    // 4. Install Widescreen 16:9 / 21:9 Menus, HUD, Radio/Cutscene Subtitles, Debriefing, Video, 3D FOV & Input hooks
+    // 4. Install Spherical Radial Fog D3D12 PSO override (active in both vanilla and DrawDistance modes)
+    if (g_RadialFog) {
+        acz_radial_fog::Install(g_ExeBase, true, &LogMsg);
+    }
+
+    // 5. Install Unified Maximum-Realism DrawDistance + OOB Terrain Extension (if DrawDistance=1)
+    if (g_DrawDistance) {
+        acz_draw_distance::Context dd_ctx{};
+        dd_ctx.exe_base     = g_ExeBase;
+        dd_ctx.acz_rva      = &AczRva;
+        dd_ctx.patch_mem    = &PatchMemoryBytes;
+        dd_ctx.install_hook = &InstallDetour64;
+        dd_ctx.log_msg      = &LogMsg;
+        acz_draw_distance::Install(dd_ctx);
+    }
+
+    // 6. Install Widescreen 16:9 / 21:9 Menus, HUD, Radio/Cutscene Subtitles, Debriefing, Video, 3D FOV & Input hooks
     InstallWidescreenAndUiHooks();
+}
+
+// ----------------------------------------------------------------------------
+// Cross-Plugin DrawDistance & RadialFog State Export (For Sibling ASI/DLL Plugins)
+// ----------------------------------------------------------------------------
+extern "C" __declspec(dllexport) void __fastcall AczEnhancer_GetDrawDistanceState(AczDrawDistanceState* out_state) {
+    acz_draw_distance::FillState(out_state, g_RadialFog, acz_radial_fog::GetPatchedPsoTotal());
 }
 
 // ----------------------------------------------------------------------------
@@ -4452,6 +4519,31 @@ extern "C" __declspec(dllexport) void __fastcall AczEnhancer_WriteStateSummary(c
     fprintf(rf, "  Active Screen Aspect:    %s (option=%d)\n", aspect_str, aspect_opt);
     fprintf(rf, "  Unlock2PlayerCampaign:   %s\n",
             g_Unlock2PlayerCampaign ? "ENABLED (2P Split: Pad=P1, KB=P2)" : "DISABLED (Single-Player Merged Pad+KB=P1)");
+    {
+        AczDrawDistanceState dd_st{};
+        acz_draw_distance::FillState(&dd_st, g_RadialFog, acz_radial_fog::GetPatchedPsoTotal());
+        const char* st_mode = (dd_st.last_stage_mode == 1u) ? "preset" :
+                              ((dd_st.last_stage_mode == 2u) ? "universal_dynamic" : "none");
+        fprintf(rf, "  DrawDistance:            %s (Grid=%dx%d, FarZ=%.0f, LastStage=%d [%s])\n",
+                dd_st.enabled ? "ENABLED (Extended Realism + OOB Terrain)" : "DISABLED (Vanilla)",
+                dd_st.coarse_grid_radius * 2 + 1, dd_st.coarse_grid_radius * 2 + 1,
+                dd_st.effective_far_z, dd_st.last_stage_id, st_mode);
+        if (dd_st.enabled) {
+            fprintf(rf, "  DrawDistance Perf:       Grid=%u coarse (%u OOB) in %u us | Flush=%u inst (%u OOB) in %u us\n",
+                    acz_draw_distance::g_PerfGridCoarseVisible.load(std::memory_order_relaxed),
+                    acz_draw_distance::g_PerfGridOobVisible.load(std::memory_order_relaxed),
+                    acz_draw_distance::g_PerfGridCpuUs.load(std::memory_order_relaxed),
+                    acz_draw_distance::g_PerfFlushInstTotal.load(std::memory_order_relaxed),
+                    acz_draw_distance::g_PerfFlushInstOob.load(std::memory_order_relaxed),
+                    acz_draw_distance::g_PerfFlushCpuUs.load(std::memory_order_relaxed));
+        }
+        fprintf(rf, "  RadialFog:               %s (Patched PSOs: total=%u [Mesh=%u, ACM=%u, Tree=%u])\n",
+                dd_st.radial_fog_enabled ? "ENABLED (Spherical)" : "DISABLED (Vanilla Planar Z)",
+                dd_st.radial_fog_pso_count,
+                acz_radial_fog::GetPatchedMeshPsoCount(),
+                acz_radial_fog::GetPatchedAcmPsoCount(),
+                acz_radial_fog::GetPatchedTreePsoCount());
+    }
     fclose(rf);
 }
 
@@ -4553,9 +4645,11 @@ static void InitializeEnhancerPlugin(const AczAddonApi* api) {
     LogMsg("[Enhancer] Game executable base: %p (Detected version: %s)",
            reinterpret_cast<void*>(g_ExeBase), GetAczExeVersionString(g_AczVersion));
     LogMsg("[Enhancer] Config file:          %s", g_EnhancerIniPath.string().c_str());
-    LogMsg("[Enhancer] Config: EnableLogging=%d, FastStartup=%d, EnableMenuOverrides=%d, MenuAspectMode=%d, Unlock2PlayerCampaign=%d, ScreenAspect=%d",
+    LogMsg("[Enhancer] Config: EnableLogging=%d, FastStartup=%d, DrawDistance=%d, RadialFog=%d, EnableMenuOverrides=%d, MenuAspectMode=%d, Unlock2PlayerCampaign=%d, ScreenAspect=%d",
            g_EnableLogging ? 1 : 0,
            g_FastStartup,
+           g_DrawDistance ? 1 : 0,
+           g_RadialFog ? 1 : 0,
            g_EnableMenuOverrides ? 1 : 0,
            g_MenuAspectMode,
            g_Unlock2PlayerCampaign ? 1 : 0,
