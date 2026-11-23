@@ -22,17 +22,19 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ---
 
-## Screenshots
+## Screenshots & Gameplay Showcase
 
 | In-Game Menu & Typography | In-Flight Combat HUD & Subtitles |
 | :---: | :---: |
 | ![Menu Preview](screenshots/menu_preview.png) | ![Gameplay Preview](screenshots/gameplay_preview.png) |
 
+<!-- Drag and drop ACZero_Enhancer_Gameplay_Showcase.mp4 here in GitHub's web editor to embed the inline HTML5 video player -->
+
 ---
 
 ## Key Components
 
-### 1. `enhancer.asi` — Widescreen 16:9/21:9, HUD, Subtitles, Input, FastStartup & 60 FPS Engine (v0.24)
+### 1. `enhancer.asi` — Widescreen 16:9/21:9, HUD, Subtitles, Input, FastStartup & 60 FPS Engine (v0.24.1)
 * **Configurable Multi-Stage Fast Startup (`FastStartup = 0 | 1 | 2 | 3` in `enhancer.ini`, default `0`)**:
   * `0` — Disabled (vanilla startup).
   * `1` — Bypasses the native launcher (`e.arc` / dialog) and controller manual screen (`CModePadManual`), and lets you press any gamepad or keyboard button during intro logos (`CModeWakeLogo`) to jump straight to the Title Screen (`CModeTitle`).
@@ -45,14 +47,14 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
   * Seamless single-player input merging (`Unlock2PlayerCampaign=0` by default) or split 2-Player Co-Op / VS Mode (`Unlock2PlayerCampaign=1`, where Player 1 is controlled by Gamepad and Player 2 independently by Keyboard).
 * **60 FPS Frame-Pacing Unlocker & Memory Pool Expansion**: Disables the broken 30.0 FPS catch-up trap (`RVA +0x20BCAF`) and expands the main engine heap (`128 MB`), per-frame 3D GIF DMA stream buffer (`8 MB`), and D3D12 texture/upload pools.
 
-### 2. `acz_hdtex.asi` — HD Texture, Terrain, Font, DDS Cache & Glyph Engine (v0.24)
+### 2. `acz_hdtex.asi` — HD Texture, Terrain, Font, DDS Cache & Glyph Engine (v0.24.1)
 * **4x HD Terrain & Map Retexturing (`256x256x1024` BC7 `Texture2DArray`)**: Intercepts native `64x64x1024` map tile uploads (`Hook_UploadTerrainTextureArray`), replaces matched tiles from `mods\textures\terrain\` (`.png`, `.jpg`, `.jpeg`) in parallel across up to 8 worker threads, leverages `.dds_cache` for instant subsequent map loads, and automatically preserves stock water alpha masks (see [`docs/TERRAIN_RETEXTURE_ARCHITECTURE.md`](docs/TERRAIN_RETEXTURE_ARCHITECTURE.md)).
-* **Autonomous BC7 / BGRA8 `.dds_cache` Engine & Direct D3D12 Replacement**: Compiles replacement textures to `BC7 Mode 6` and `BGRA8` `.dds_cache` files on the fly with Display P3 -> sRGB color normalization, loading HD textures directly into D3D12 with zero runtime PNG/JPEG decode overhead.
+* **Autonomous BC7 / BGRA8 `.dds_cache` Engine & Direct D3D12 Replacement**: Compiles replacement textures to `BC7 Mode 6` and `BGRA8` `.dds_cache` files on the fly with Display P3 -> sRGB color normalization, loading HD textures directly into D3D12 with zero runtime PNG/JPEG decode overhead (with automatic SEH crash guard and safe fallback to direct PNG loading if a GPU/driver fails DDS allocation).
 * **Live Controller & Keyboard Glyph Auto-Switching (`GamepadGlyphs = AUTO | PS | XBOX | KB`)**: Automatically detects active input across PlayStation, Xbox, and Keyboard every frame and swaps all menu/HUD button prompts (`pads/`).
 * **Unified Master Font Atlases**: Replaces dynamic in-game fonts (`GameFont`) with high-resolution master font atlases (`MASTER_EN_font_32x32.png`, `MASTER_EN_font_64x64.png`), complete with per-glyph core centering, standard baseline height (`std_h`) alignment, and automatic subtitle bracket generation.
 * **Lock-Free Render Thread & TIM2/SWAD Support**: Uses a 512-Kbit Bloom filter and a 64K lock-free hash table to replace `GIM`, `FHM`, and `.swa` (`SWAD`) `TIM2` textures with zero stutter, including `_16x9.png` and `_21x9.png` aspect-ratio variants.
 
-### 3. `memdump.asi` — Diagnostics & Crash Logger (v0.16.5)
+### 3. `memdump.asi` — Diagnostics & Crash Logger (v0.16.6)
 * **Completely Independent**: Runs standalone or alongside other mods without hard dependencies.
 * **Instant F2 Hotkey & On-Demand D3D12 Screenshot**: Press `F2` in-game to trigger an immediate diagnostic state report and pre-`Present` D3D12 backbuffer `screenshot.png`.
 * **Crash Triage & Automated Cleanup**: Catches unhandled exceptions, records CPU registers and stack frames, generates standard Windows Minidumps (`acz_process.dmp`), queries sibling modules for live state, and prunes dump folders older than 24 hours on launch.
@@ -73,16 +75,19 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 
 ## Installation Guide
 
+![Installation Steps](screenshots/install_steps.gif)
+
 ### Step 1: Install ACZero Enhancer (`version.dll` + `mods\enhancer\*.asi`)
 * Download the latest release (`ACZero_Enhancer_v0.24.1_Release.zip`) from [Releases](../../releases).
 * Extract `version.dll` and the `mods\` folder directly into your game root directory (next to `acz.exe`, usually inside the `ACZero\` subfolder).
 * *(Optional)* If you also use the legacy `version.dll` (`ACE COMBAT ZERO mod loader 1.2`) for `.arc` mods, simply rename the old `version.dll` to `version_orig.dll` next to `acz.exe`.
 * *(Linux / Steam Deck)* Add `WINEDLLOVERRIDES="version=n,b" %command%` to your Steam Launch Options so Proton loads `version.dll`.
 
-### Step 2: Install HD Textures (OstrichMods HUD Upgrade)
-1. Download `actrilogy-hud-upgrade-v1.2.1.zip` from the official [OstrichMods Trilogy page](https://ostrichmods.com/trilogy.html).
-2. Place the downloaded `actrilogy-hud-upgrade-v1.2.1.zip` and `custom textures.zip` into the `mods\` directory (do not extract it manually).
-3. Launch the game via `acz.exe`. On first launch, `acz_hdtex.asi` will automatically unpack, convert, and install all HUD, weapon, font, and squadron textures into `mods\textures\` and prebuild the `.dds_cache`.
+### Step 2: Install HD Textures (OstrichMods HUD Upgrade & Custom Textures)
+1. Download `actrilogy-hud-upgrade-v1.2.1.zip` from the official [OstrichMods Trilogy page](https://ostrichmods.com/trilogy.html) and `custom textures.zip` from [Releases](../../releases).
+2. Place both `actrilogy-hud-upgrade-v1.2.1.zip` and `custom textures.zip` into the `mods\` directory (**do not** extract them manually).
+3. Launch the game via `acz.exe`. On first launch, `acz_hdtex.asi` will automatically unpack, convert, and install all HUD, menu, font, controller glyph, and HD terrain textures into `mods\textures\` and prebuild the `.dds_cache`.
+4. To verify installation, confirm that `mods\enhancer\enhancer.log` was created. *(When upgrading `custom textures.zip`, delete `mods\textures\.install_stamp` if present so the auto-installer extracts newly added textures.)*
 
 ---
 

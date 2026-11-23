@@ -482,7 +482,7 @@ static bool ReadWholeFileBytes(const fs::path& p, std::vector<uint8_t>& out) {
     int64_t sz = ftell(f);
     fseek(f, 0, SEEK_SET);
 #endif
-    if (sz < 0 || sz > 512LL * 1024LL * 1024LL) {
+    if (sz < 0 || sz > 2048LL * 1024LL * 1024LL) {
         fclose(f);
         return false;
     }
@@ -2529,7 +2529,11 @@ static void AutoInstallTexturePacksIfPresent(
     int cnt_direct_tex = 0;
     for (const auto& zp : tc_zips) {
         ZipArchiveReader zf;
-        if (!zf.open(zp)) continue;
+        if (!zf.open(zp)) {
+            LogMsg("[ACZ-AutoInstaller] WARNING: Failed to open archive '%s' (corrupt ZIP or exceeds 2 GB limit).\n",
+                   zp.filename().string().c_str());
+            continue;
+        }
         for (const auto& e : zf.entries) {
             if (e.is_dir) continue;
             std::string norm_p = e.filename;

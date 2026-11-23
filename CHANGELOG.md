@@ -217,8 +217,9 @@ Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2
 
   * **`.jpg` / `.jpeg` Texture Support:** Extended `ScanTexturesDirectory()` and WIC decoding to load `.jpg` and `.jpeg` replacement textures alongside `.png`, significantly reducing disk and archive footprint for large HD terrain packs (`mods\textures\terrain\`).
 
-* **v0.24.1 (DDS Cache Startup Crash Guard, Safe PNG Fallback & `v2.0.0.1` Diagnostics):**
+* **v0.24.1 (DDS Cache Startup Crash Guard, 2 GB Auto-Installer Archive Support & `v2.0.0.1` Diagnostics):**
 
+  * **Raised Native Texture Pack Auto-Installer Archive Limit (`512 MB -> 2 GB` in `acz_tex_installer.h`):** Fixed `ReadWholeFileBytes` silently rejecting the new `v0.24` `custom textures.zip` (`728 MB`) on clean installs because of a hardcoded `512 MB` cap, and added explicit warning logging if an archive fails to open.
   * **SEH Crash Guard & Automatic PNG Fallback (`SafeAllocatePooledTextureSeh`):** Wrapped `g_AllocatePooledTexture` inside `LoadTextureFromDdsCacheFile` in a POD SEH guard. If a GPU/driver, Steam `v2.0.0.1`, or Linux Proton setup throws an exception (`0xC0000005`) during `.dds_cache` texture allocation, `acz_hdtex.asi` logs the exact texture, dimensions, format, executable version, and `UploadRingOffset`, disables `.dds_cache` for the current session, and falls back cleanly to `CreateTextureFromPngMemory` without crashing.
   * **Explicit `EnableDdsCache=1` in `mods\enhancer\acz_hdtex.ini`:** Exposed `EnableDdsCache` directly in the default configuration and updated legacy `modloader.log` comments to `mods\enhancer\enhancer.log`.
   * **Steam `v2.0.0.1` Diagnostics (`[V2.0.0.1-DIAG]`):** Logs resolved D3D12/GS/Terrain function addresses & prologue bytes, `pool_tbl` values, per-hook status mask (`ok1..ok11`) on failure, and the first 32 DDS allocations when `acz.exe` `v2.0.0.1` is detected.
