@@ -1,3 +1,5 @@
+
+
 # ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.24.1)
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
@@ -28,7 +30,7 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 | :---: | :---: |
 | ![Menu Preview](screenshots/menu_preview.png) | ![Gameplay Preview](screenshots/gameplay_preview.png) |
 
-<!-- Drag and drop ACZero_Enhancer_Gameplay_Showcase.mp4 here in GitHub's web editor to embed the inline HTML5 video player -->
+https://github.com/user-attachments/assets/107ea966-1ae2-48dc-9874-c3830ce47e19
 
 ---
 
