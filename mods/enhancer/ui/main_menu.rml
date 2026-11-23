@@ -1,0 +1,36 @@
+<rml>
+<head>
+    <title>ACZ Main Menu</title>
+    <link type="text/rcss" href="acz_theme.rcss" />
+</head>
+<body>
+    <div id="bg-grid"></div>
+    <div id="bg-scanline"></div>
+    <div id="bg-sparks" data-count="34" data-speed="1.0" data-color="#ff5a18"></div>
+
+    <div id="top-prompts">
+        <span class="prompt-cap" id="cap-ok">ENTER</span><span>OK</span>
+        <span class="prompt-sep">|</span>
+        <span class="prompt-cap" id="cap-cancel">ESC</span><span>CANCEL</span>
+        <span class="prompt-sep">|</span>
+        <span class="prompt-cap" id="cap-change">LT/RT</span><span>CHANGE</span>
+        <span class="prompt-right" id="version-tag">[F1: VANILLA / CUSTOM]  [F5: HOT-RELOAD]</span>
+    </div>
+
+    <div id="menu-frame">
+        <div id="breadcrumb-bar">
+            <span class="folder-tag">DIR</span>
+            <span id="breadcrumb-text">MAIN MENU</span>
+            <span id="toast-msg"></span>
+        </div>
+
+        <div id="columns">
+            <div class="col-left"  id="col-left"></div>
+            <div class="col-mid"   id="col-mid"></div>
+            <div class="col-right" id="col-right"></div>
+        </div>
+    </div>
+
+    <div id="footer-desc">Play through the game following a storyline.</div>
+</body>
+</rml>

@@ -44,8 +44,8 @@ if exist "%~dp0version_loader.cpp" (
 )
 
 if exist "%~dp0enhancer.cpp" (
-    echo [*] Building enhancer.asi ^(v0.24^)...
-    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.asi" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
+    echo [*] Building enhancer.asi ^(v0.25^)...
+    cl.exe /nologo /O2 /Oi /GL /EHsc /std:c++17 /utf-8 /I"%~dp0third_party\RmlUi\Include" /LD "%~dp0enhancer.cpp" /Fe:"%~dp0build\enhancer.asi" /Fo:"%~dp0build\\" user32.lib /link /OPT:REF /OPT:ICF
     if errorlevel 1 goto :err
     copy /y "%~dp0build\enhancer.asi" "%~dp0mods\enhancer\enhancer.asi" >nul
 )

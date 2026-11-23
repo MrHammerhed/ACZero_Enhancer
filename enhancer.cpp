@@ -34,6 +34,12 @@
 
 #include "acz_radial_fog_shaders.h"
 #include "acz_draw_distance.h"
+#include "ui/acz_ui_renderer.h"
+#include "ui/acz_ui_font.h"
+#include "ui/acz_ui_widgets.h"
+#include "ui/screen_options.h"
+#include "ui/acz_rmlui_backend.h"
+#pragma comment(lib, "third_party/RmlUi/build_x64/Release/rmlui.lib")
 
 namespace fs = std::filesystem;
 
@@ -130,8 +136,9 @@ static bool                  g_Unlock2PlayerCampaign        = false; // 0 = Sing
 static bool                  g_EnableMenuOverrides          = true;
 static int                   g_MenuAspectMode               = 0;     // 0 = Auto, 1 = Force 16:9, 2 = Force 4:3, 3 = Force 21:9
 static int                   g_ScreenAspect                 = 1;     // 0 = 4:3, 1 = 16:9, 2 = 21:9 (Active aspect ratio; save file always writes 16:9)
-static bool                  g_DrawDistance                 = false; // 0 = Disabled (vanilla, default), 1 = Maximum Realism 4x DrawDistance + OOB Terrain
+static bool                  g_DrawDistance                 = false; // 0 = Disabled (vanilla, default), 1 = Unified 2x DrawDistance + OOB Terrain
 static bool                  g_RadialFog                    = true;  // 1 = Spherical radial fog (default; active in both vanilla and DrawDistance modes), 0 = Vanilla planar Z fog
+static bool                  g_EnableCustomUI               = true;  // 1 = Native-res D3D12 UI Engine (replaces legacy SWG Options + adds Enhancer tab; F1 hotkey)
 
 static std::atomic<uint16_t> g_LiveInputButtons{0};
 static std::atomic<int>      g_SuppressInputFramesAfterLogoSkip{0};
@@ -142,6 +149,19 @@ static void SaveScreenAspectToIni(int aspect) {
     const std::string ini_str = g_EnhancerIniPath.string();
     const std::string val_str = std::to_string(aspect);
     WritePrivateProfileStringA("Widescreen", "ScreenAspect", val_str.c_str(), ini_str.c_str());
+}
+
+static void SaveAllEnhancerSettingsToIni() {
+    const std::string ini_str = g_EnhancerIniPath.string();
+    WritePrivateProfileStringA("Enhancer",     "EnableLogging",         g_EnableLogging ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("Enhancer",     "FastStartup",           std::to_string(g_FastStartup).c_str(), ini_str.c_str());
+    WritePrivateProfileStringA("Enhancer",     "EnableMenuOverrides",   g_EnableMenuOverrides ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("Enhancer",     "MenuAspectMode",        std::to_string(g_MenuAspectMode).c_str(), ini_str.c_str());
+    WritePrivateProfileStringA("Enhancer",     "Unlock2PlayerCampaign", g_Unlock2PlayerCampaign ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("UI",           "EnableCustomUI",        g_EnableCustomUI ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("DrawDistance", "DrawDistance",          g_DrawDistance ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("DrawDistance", "RadialFog",             g_RadialFog ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("Widescreen",   "ScreenAspect",          std::to_string(g_ScreenAspect).c_str(), ini_str.c_str());
 }
 
 // ----------------------------------------------------------------------------
@@ -193,6 +213,24 @@ static bool InstallDetour64(
     if (prologue_len < 14 || prologue_len > 32 || (prologue_len + 14) > kTrampAllocSize) return false;
 
     const uint8_t* target_bytes = reinterpret_cast<const uint8_t*>(target_addr);
+    static const uint8_t kAbsJmpPrefix[6] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    if (std::memcmp(target_bytes, kAbsJmpPrefix, 6) == 0) {
+        // Sibling ASI (e.g. memdump.asi) already installed a 14-byte absolute jump detour here.
+        // Chain cleanly by saving its destination as our trampoline and updating the jump target.
+        void* prev_hook = *reinterpret_cast<void* const*>(target_addr + 6);
+        DWORD old_protect = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(target_addr), 14, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            return false;
+        }
+        WriteAbsoluteJump64(reinterpret_cast<void*>(target_addr), hook_fn);
+        VirtualProtect(reinterpret_cast<void*>(target_addr), 14, old_protect, &old_protect);
+        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target_addr), 14);
+        *out_trampoline = prev_hook;
+        LogMsg("[Enhancer] Chained hook '%s' at %p -> prev=%p",
+               name, reinterpret_cast<void*>(target_addr), prev_hook);
+        return true;
+    }
+
     const bool has_rip_mov_rax_at_11 = (prologue_len == 18 &&
                                         expected_prologue[11] == 0x48 &&
                                         expected_prologue[12] == 0x8B &&
@@ -328,6 +366,8 @@ static int ReadEnhancerIniInt(const char* key, int default_val) {
     if (val != -99999) return val;
     val = GetPrivateProfileIntA("DrawDistance", key, -99999, ini_str.c_str());
     if (val != -99999) return val;
+    val = GetPrivateProfileIntA("UI", key, -99999, ini_str.c_str());
+    if (val != -99999) return val;
     val = GetPrivateProfileIntA("Settings", key, -99999, ini_str.c_str());
     if (val != -99999) return val;
     val = GetPrivateProfileIntA("General", key, -99999, ini_str.c_str());
@@ -395,6 +435,7 @@ static void LoadEnhancerConfigIni() {
     g_Unlock2PlayerCampaign = ReadEnhancerIniInt("Unlock2PlayerCampaign", 0) != 0;
     g_DrawDistance          = ReadEnhancerIniInt("DrawDistance",          0) != 0;
     g_RadialFog             = ReadEnhancerIniInt("RadialFog",             1) != 0;
+    g_EnableCustomUI        = ReadEnhancerIniInt("EnableCustomUI",        1) != 0;
 
     // Read Widescreen Menu Override settings from enhancer.ini (with fallback to acz_hdtex.ini for compatibility)
     fs::path hd_ini = g_EnhancerDir / "acz_hdtex.ini";
@@ -1533,10 +1574,22 @@ static void __fastcall Hook_CSwgInstanceUpdate(void* this_ptr) {
     g_OrigCSwgInstanceUpdate(this_ptr);
 }
 
+static bool TryInterceptSwgMenuForCustomUi(const std::string& stem);
+static bool UpdateCustomUiFromInput(uint16_t pad_btns, float stick_x, float stick_y, acz_ui::InputDeviceKind dev_kind);
+
 static void* __fastcall Hook_CSwadMenuDraw(void* this_ptr, void* a2) {
     if (this_ptr != nullptr) {
         void* swg_instance = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(this_ptr) + 0x08);
         SyncSwgInstanceAspect(swg_instance, true);
+        if (g_EnableCustomUI && swg_instance != nullptr) {
+            uint8_t* swg_data = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(swg_instance) + 0x08);
+            if (swg_data != nullptr && std::memcmp(swg_data, "SWG\0", 4) == 0) {
+                std::string stem = ResolveSwgMenuStem(swg_data);
+                if (TryInterceptSwgMenuForCustomUi(stem)) {
+                    return a2; // Suppress legacy SWAD/SWG rendering while preserving GIF DMA cursor
+                }
+            }
+        }
     }
     return g_OrigCSwadMenuDraw(this_ptr, a2);
 }
@@ -3661,7 +3714,8 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
             uintptr_t devs_end    = *reinterpret_cast<const uintptr_t*>(g_ExeBase + AczRva(0x33B188u));
             uint64_t  cfg_ctrl2   = *reinterpret_cast<const uint64_t*>(g_ExeBase + AczRva(0x31E4A0u));
 
-            if (slots_begin != 0 && (slots_end - slots_begin) == 0xA0u &&
+            acz_ui::InputDeviceKind ui_dev_kind = acz_ui::InputDeviceKind::PlayStation;
+        if (slots_begin != 0 && (slots_end - slots_begin) == 0xA0u &&
                 devs_begin != 0 && devs_end > devs_begin && cfg_ctrl2 == ~0ULL) {
                 size_t   num_devs    = (devs_end - devs_begin) / 0xA0u;
                 int32_t  pad_dev_idx = -1;
@@ -3735,6 +3789,7 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
         uintptr_t devs_end    = *reinterpret_cast<const uintptr_t*>(g_ExeBase + AczRva(0x33B188u));
         uint64_t  cfg_ctrl2   = *reinterpret_cast<const uint64_t*>(g_ExeBase + AczRva(0x31E4A0u));
 
+        acz_ui::InputDeviceKind ui_dev_kind = acz_ui::InputDeviceKind::PlayStation;
         if (slots_begin != 0 && (slots_end - slots_begin) == 0xA0u &&
             devs_begin != 0 && devs_end > devs_begin) {
             size_t   num_devs = (devs_end - devs_begin) / 0xA0u;
@@ -3795,9 +3850,14 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
 
             if (pad_dev != 0) {
                 uint32_t guid_d1 = *reinterpret_cast<const uint32_t*>(pad_dev + 0x04u);
+                ui_dev_kind = ((guid_d1 & 0xFFFFu) == 0x054Cu)
+                    ? acz_ui::InputDeviceKind::PlayStation
+                    : acz_ui::InputDeviceKind::Xbox;
                 if ((guid_d1 & 0xFFFFu) == 0x054Cu) {
                     UpdateSonyVibrationFromGameSEH(g_ExeBase, p1_large, p1_small);
                 }
+            } else if (kb_st != nullptr) {
+                ui_dev_kind = acz_ui::InputDeviceKind::Keyboard;
             }
 
             // Notify acz_hdtex.asi BEFORE merging st1 (Keyboard) into st0 (Gamepad) so live
@@ -3856,6 +3916,18 @@ static void __fastcall Hook_PollAllInputDevices_Enh(uint8_t* state_array) {
         uint16_t live_btns = *reinterpret_cast<const uint16_t*>(state_array + 0x28u) |
                              *reinterpret_cast<const uint16_t*>(state_array + 0x58u);
         g_LiveInputButtons.store(live_btns, std::memory_order_relaxed);
+
+        // Feed ACZ Custom D3D12 UI Engine and suppress native game input while our UI is open
+        {
+            const float stick_x = *reinterpret_cast<const float*>(state_array + 0x08u);
+            const float stick_y = *reinterpret_cast<const float*>(state_array + 0x0Cu);
+            if (UpdateCustomUiFromInput(live_btns, stick_x, stick_y, ui_dev_kind)) {
+                *reinterpret_cast<uint16_t*>(state_array + 0x28u) = 0u;
+                *reinterpret_cast<uint16_t*>(state_array + 0x58u) = 0u;
+                std::memset(state_array + 0x08u, 0, 0x20u);
+            }
+        }
+
         int suppress_cnt = g_SuppressInputFramesAfterLogoSkip.load(std::memory_order_relaxed);
         if (suppress_cnt > 0) {
             g_SuppressInputFramesAfterLogoSkip.store(suppress_cnt - 1, std::memory_order_relaxed);
@@ -4388,6 +4460,321 @@ static bool ApplyFastStartupPatches() {
     return false;
 }
 
+// ----------------------------------------------------------------------------
+// ACZ Custom D3D12 UI Engine (Stage 1: Unified OPTIONS & ENHANCER Screen)
+// ----------------------------------------------------------------------------
+static constexpr uintptr_t RVA_GlobalD3D12Context_Ui = 0x0033DA48;
+static constexpr uintptr_t RVA_EndFrameAndPresent_Ui = 0x0020C280;
+
+static const uint8_t PROLOGUE_EndFrameAndPresent_Ui[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, // mov [rsp+08h], rbx
+    0x48, 0x89, 0x74, 0x24, 0x10, // mov [rsp+10h], rsi
+    0x48, 0x89, 0x7C, 0x24, 0x18  // mov [rsp+18h], rdi
+};
+
+using FnEndFrameAndPresentUi = void (__fastcall*)();
+static FnEndFrameAndPresentUi    g_OrigEndFrameAndPresentUi = nullptr;
+
+static acz_ui::UiRenderer           g_UiRenderer;
+static acz_ui::UiFontManager        g_UiFonts;
+static acz_ui::UiInputController    g_UiInput;
+static acz_ui::OptionsScreen        g_OptionsScreen;
+static acz_ui::RmlOptionsController g_RmlOptions;
+static std::mutex                   g_UiMutex;
+static bool                         g_UiEngineReady = false;
+static double                       g_UiLastFrameSec = 0.0;
+static std::atomic<int>             g_UiPostCloseSuppressFrames{0};
+static bool                         g_PrevF5Down = false;
+
+// Thread-safe input handoff from PollAllInputDevices -> main render thread (Hook_EndFrameAndPresentUi)
+static std::atomic<bool>            g_UiIsOpenAtomic{false};
+static std::atomic<uint16_t>        g_UiPadBtnsAtomic{0};
+static std::atomic<int>             g_UiStickXMilli{0};
+static std::atomic<int>             g_UiStickYMilli{0};
+static std::atomic<uint8_t>         g_UiDevKindAtomic{0};
+static std::atomic<int>             g_UiPendingNativeAspect{-1};
+static uint64_t                     g_UiFrameCounter = 0;
+static uint64_t                     g_MainSelectLastSeenFrame = 0;
+static bool                         g_UseCustomMainMenu = true; // Toggled live via F1 in MainSelect!
+
+static double GetMonotonicSecondsUi() {
+    static LARGE_INTEGER s_freq{};
+    if (s_freq.QuadPart == 0) QueryPerformanceFrequency(&s_freq);
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    return (s_freq.QuadPart > 0) ? (static_cast<double>(now.QuadPart) / static_cast<double>(s_freq.QuadPart)) : 0.0;
+}
+
+static bool IsOurProcessForegroundWindow() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+static int MapSwgStemToOptionsTab(const std::string& stem) {
+    if (stem == "ControlSet")  return acz_ui::OptionsScreen::kTabControls;
+    if (stem == "SoundSet")    return acz_ui::OptionsScreen::kTabAudio;
+    if (stem == "Brightness" || stem == "ScrPosition" || stem == "LanguageSet") {
+        return acz_ui::OptionsScreen::kTabDisplay;
+    }
+    return -1;
+}
+
+static bool TryInterceptSwgMenuForCustomUi(const std::string& stem) {
+    if (!g_UiEngineReady) return false;
+
+    if (stem == "MainSelect") {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_MainSelectLastSeenFrame = g_UiFrameCounter;
+        if (g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady()) {
+            if (!g_RmlOptions.IsMainMenuMode()) {
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+                g_UiInput.ResetHeldState();
+            }
+            g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            return true; // Suppress legacy MainSelect.swa; render our HTML/CSS main_menu.rml!
+        }
+        return false; // Vanilla MainSelect.swa active (toggled via F1)
+    }
+
+    if (!g_EnableCustomUI) return false;
+    const int tab = MapSwgStemToOptionsTab(stem);
+    if (tab < 0) return false;
+
+    std::lock_guard<std::mutex> lock(g_UiMutex);
+    if (!g_OptionsScreen.IsOpen()) {
+        g_OptionsScreen.Open(tab, true);
+        g_RmlOptions.OnOpened(g_OptionsScreen, tab, true);
+        g_UiInput.ResetHeldState();
+        g_UiIsOpenAtomic.store(true, std::memory_order_release);
+        LogMsg("[UI] Intercepted legacy SWG submenu '%s' -> opened ACZ D3D12 Options (tab=%d).", stem.c_str(), tab);
+    }
+    return true;
+}
+
+// Called from PollAllInputDevices (may run on a worker/input thread):
+// ONLY captures input atomically and suppresses game input while UI is open.
+// All UI state updates & native option callbacks run strictly on the main render thread!
+static bool UpdateCustomUiFromInput(uint16_t pad_btns, float stick_x, float stick_y, acz_ui::InputDeviceKind dev_kind) {
+    if (!g_UiEngineReady) return false;
+
+    g_UiPadBtnsAtomic.store(pad_btns, std::memory_order_relaxed);
+    g_UiStickXMilli.store(static_cast<int>(stick_x * 1000.0f), std::memory_order_relaxed);
+    g_UiStickYMilli.store(static_cast<int>(stick_y * 1000.0f), std::memory_order_relaxed);
+    if (pad_btns != 0 || std::fabs(stick_x) > 0.3f || std::fabs(stick_y) > 0.3f) {
+        g_UiDevKindAtomic.store(static_cast<uint8_t>(dev_kind), std::memory_order_relaxed);
+    }
+
+    if (g_UiIsOpenAtomic.load(std::memory_order_acquire)) {
+        return true;
+    }
+    int post_sup = g_UiPostCloseSuppressFrames.load(std::memory_order_relaxed);
+    if (post_sup > 0) {
+        g_UiPostCloseSuppressFrames.store(post_sup - 1, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+static void TickCustomUiOnMainThread() {
+    const double now_sec = GetMonotonicSecondsUi();
+    float dt_sec = (g_UiLastFrameSec > 0.0) ? static_cast<float>(now_sec - g_UiLastFrameSec) : (1.0f / 60.0f);
+    if (dt_sec < 0.0f || dt_sec > 0.1f) dt_sec = 1.0f / 60.0f;
+    g_UiLastFrameSec = now_sec;
+
+    const uint16_t pad_btns = g_UiPadBtnsAtomic.load(std::memory_order_relaxed);
+    const float stick_x     = static_cast<float>(g_UiStickXMilli.load(std::memory_order_relaxed)) * 0.001f;
+    const float stick_y     = static_cast<float>(g_UiStickYMilli.load(std::memory_order_relaxed)) * 0.001f;
+    const auto dev_kind     = static_cast<acz_ui::InputDeviceKind>(g_UiDevKindAtomic.load(std::memory_order_relaxed));
+
+    if (pad_btns != 0 || std::fabs(stick_x) > 0.3f || std::fabs(stick_y) > 0.3f) {
+        g_UiInput.SetActiveDevice(dev_kind);
+    }
+
+    const bool focused = IsOurProcessForegroundWindow();
+    const acz_ui::UiInputSnapshot snap = g_UiInput.Update(pad_btns, stick_x, stick_y, focused, now_sec);
+    const bool f5_now  = focused && ((GetAsyncKeyState(VK_F5) & 0x8000) != 0);
+    const bool f5_edge = f5_now && !g_PrevF5Down;
+    g_PrevF5Down = f5_now;
+
+    const bool in_main_select = (g_MainSelectLastSeenFrame > 0) && ((g_UiFrameCounter - g_MainSelectLastSeenFrame) <= 2u);
+    if (in_main_select && g_EnableCustomUI && g_RmlOptions.IsReady()) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            g_UiInput.ResetHeldState();
+            if (g_UseCustomMainMenu) {
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+                LogMsg("[UI] F1 A/B Toggle -> CUSTOM HTML/CSS Main Menu (main_menu.rml)");
+            } else {
+                g_UiIsOpenAtomic.store(false, std::memory_order_release);
+                g_UiPostCloseSuppressFrames.store(4, std::memory_order_relaxed);
+                LogMsg("[UI] F1 A/B Toggle -> VANILLA MainSelect.swa");
+            }
+            return;
+        }
+        if (g_UseCustomMainMenu) {
+            if (!g_RmlOptions.IsMainMenuMode()) {
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+            }
+            g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            g_RmlOptions.UpdateMainMenu(g_OptionsScreen, snap, dt_sec, f5_edge, g_Unlock2PlayerCampaign);
+            return;
+        }
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Left MainSelect: release MainMenu input capture if Options overlay is not open
+    if (!g_OptionsScreen.IsOpen()) {
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        if (snap.toggleUi) {
+            g_OptionsScreen.Open(acz_ui::OptionsScreen::kTabEnhancer, false);
+            g_RmlOptions.OnOpened(g_OptionsScreen, acz_ui::OptionsScreen::kTabEnhancer, false);
+            g_UiInput.ResetHeldState();
+            g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            LogMsg("[UI] Opened ACZ D3D12 Options overlay via F1 hotkey.");
+        }
+        return;
+    }
+
+    const bool was_open = g_OptionsScreen.IsOpen();
+    if (g_RmlOptions.IsReady()) {
+        g_RmlOptions.Update(g_OptionsScreen, snap, dt_sec, f5_edge);
+    } else {
+        g_OptionsScreen.Update(snap, dt_sec);
+    }
+    if (was_open && !g_OptionsScreen.IsOpen()) {
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        g_UiPostCloseSuppressFrames.store(8, std::memory_order_relaxed);
+    }
+}
+
+static void RenderCustomUiOnD3D12SEH(uint8_t* d3d_ctx, bool render_main_menu) {
+    if (!d3d_ctx) return;
+    __try {
+        uint32_t backbuf_idx             = (*reinterpret_cast<const uint32_t*>(d3d_ctx + 0x00)) & 1u;
+        ID3D12Device* device             = *reinterpret_cast<ID3D12Device* const*>(d3d_ctx + 0x08);
+        ID3D12GraphicsCommandList* clist = *reinterpret_cast<ID3D12GraphicsCommandList* const*>(d3d_ctx + 0x10);
+        ID3D12Resource* backbuffer       = *reinterpret_cast<ID3D12Resource* const*>(d3d_ctx + static_cast<size_t>(backbuf_idx) * 8u + 0x48);
+        if (!device || !clist || !backbuffer) return;
+
+        if (!g_UiRenderer.BeginFrame(device, backbuffer, backbuf_idx)) return;
+        if (g_RmlOptions.IsReady()) {
+            g_RmlOptions.Render(g_OptionsScreen, g_UiInput.ActiveDevice(), render_main_menu);
+        } else {
+            g_UiFonts.SyncGpuAtlas(g_UiRenderer);
+            g_OptionsScreen.Render(g_UiRenderer, g_UiFonts, g_UiInput.ActiveDevice());
+            g_UiFonts.SyncGpuAtlas(g_UiRenderer); // flush newly rasterized glyphs on first frame
+        }
+        g_UiRenderer.EndFrame(clist);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void __fastcall Hook_EndFrameAndPresentUi() {
+    if (g_UiEngineReady && g_ExeBase != 0) {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        ++g_UiFrameCounter;
+        TickCustomUiOnMainThread();
+        const bool in_main_select = (g_MainSelectLastSeenFrame > 0) && ((g_UiFrameCounter - g_MainSelectLastSeenFrame) <= 2u);
+        const bool render_main = in_main_select && g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady();
+        if (render_main || g_OptionsScreen.IsOpen()) {
+            uint8_t* d3d_ctx = *reinterpret_cast<uint8_t* const*>(g_ExeBase + AczRva(RVA_GlobalD3D12Context_Ui));
+            if (d3d_ctx != nullptr) {
+                RenderCustomUiOnD3D12SEH(d3d_ctx, render_main);
+            }
+        }
+    }
+    if (g_OrigEndFrameAndPresentUi != nullptr) {
+        g_OrigEndFrameAndPresentUi();
+    }
+    // Apply deferred native ScreenAspect change strictly AFTER Present (when D3D12 command list is closed!)
+    int pending_aspect = g_UiPendingNativeAspect.exchange(-1, std::memory_order_acq_rel);
+    if (pending_aspect >= 0 && pending_aspect <= 2 && g_OrigSwgOptionSetAspect != nullptr) {
+        int32_t arg = pending_aspect;
+        g_OrigSwgOptionSetAspect(nullptr, nullptr, nullptr, &arg);
+    }
+}
+
+static void InitializeCustomUiEngine() {
+    if (!g_ExeBase) return;
+
+    if (!g_UiFonts.Initialize(g_GameDir.wstring())) {
+        LogMsg("[UI] WARNING: Failed to load any TrueType font (expected mods\\enhancer\\fonts\\*.ttf). Custom UI disabled.");
+        return;
+    }
+
+    acz_ui::OptionsHostBridge bridge{};
+    bridge.exeBase = g_ExeBase;
+    bridge.exeDir  = g_GameDir.wstring();
+    bridge.rva     = [](uintptr_t r) { return AczRva(r); };
+
+    bridge.getScreenAspect = []() { return g_ScreenAspect; };
+    bridge.setScreenAspect = [](int v) {
+        if (v < 0 || v > 2) return;
+        g_ScreenAspect = v;
+        SaveScreenAspectToIni(v);
+        if (g_ExeBase != 0) {
+            *reinterpret_cast<int32_t*>(g_ExeBase + AczRva(RVA_ScreenSizeOption)) = v;
+        }
+        // Defer native OptionSetAspect (SwapChain resize) until AFTER EndFrameAndPresent finishes!
+        g_UiPendingNativeAspect.store(v, std::memory_order_release);
+    };
+    bridge.getDrawDistance        = []() { return g_DrawDistance ? 1 : 0; };
+    bridge.setDrawDistance        = [](int v) { g_DrawDistance = (v != 0); };
+    bridge.getRadialFog           = []() { return g_RadialFog ? 1 : 0; };
+    bridge.setRadialFog           = [](int v) { g_RadialFog = (v != 0); };
+    bridge.getFastStartup         = []() { return g_FastStartup; };
+    bridge.setFastStartup         = [](int v) { g_FastStartup = std::clamp(v, 0, 3); };
+    bridge.getUnlock2P            = []() { return g_Unlock2PlayerCampaign ? 1 : 0; };
+    bridge.setUnlock2P            = [](int v) { g_Unlock2PlayerCampaign = (v != 0); };
+    bridge.getEnableMenuOverrides = []() { return g_EnableMenuOverrides ? 1 : 0; };
+    bridge.setEnableMenuOverrides = [](int v) { g_EnableMenuOverrides = (v != 0); };
+    bridge.getMenuAspectMode      = []() { return g_MenuAspectMode; };
+    bridge.setMenuAspectMode      = [](int v) { g_MenuAspectMode = std::clamp(v, 0, 3); };
+    bridge.getEnableCustomUI      = []() { return g_EnableCustomUI ? 1 : 0; };
+    bridge.setEnableCustomUI      = [](int v) { g_EnableCustomUI = (v != 0); };
+    bridge.getEnableLogging       = []() { return g_EnableLogging ? 1 : 0; };
+    bridge.setEnableLogging       = [](int v) { g_EnableLogging = (v != 0); };
+    bridge.saveEnhancerIni        = []() { SaveAllEnhancerSettingsToIni(); };
+
+    bridge.isHdTexLoaded = []() {
+        return GetModuleHandleA("acz_hdtex.asi") != nullptr || GetModuleHandleA("acz_hdtex.dll") != nullptr;
+    };
+    bridge.notifyHdTexReload = []() {
+        HMODULE h = GetModuleHandleA("acz_hdtex.asi");
+        if (!h) h = GetModuleHandleA("acz_hdtex.dll");
+        if (h) {
+            using FnReload = void (__fastcall*)();
+            auto fn = reinterpret_cast<FnReload>(GetProcAddress(h, "AczHdTex_ReloadRuntimeSettings"));
+            if (fn) fn();
+        }
+    };
+    bridge.isMemDumpLoaded = []() {
+        return GetModuleHandleA("memdump.asi") != nullptr || GetModuleHandleA("memdump.dll") != nullptr;
+    };
+
+    g_OptionsScreen.Initialize(bridge);
+    g_RmlOptions.Initialize(&g_UiRenderer, g_GameDir, g_ExeBase, [](uintptr_t r) { return AczRva(r); }, &LogMsg);
+
+    const uintptr_t present_addr = g_ExeBase + AczRva(RVA_EndFrameAndPresent_Ui);
+    if (InstallDetour64(
+            "EndFrameAndPresent_CustomUI",
+            present_addr,
+            PROLOGUE_EndFrameAndPresent_Ui,
+            sizeof(PROLOGUE_EndFrameAndPresent_Ui),
+            reinterpret_cast<const void*>(&Hook_EndFrameAndPresentUi),
+            reinterpret_cast<void**>(&g_OrigEndFrameAndPresentUi))) {
+        g_UiEngineReady = true;
+        LogMsg("[UI] Initialized ACZ D3D12 UI Engine (EnableCustomUI=%d, F1 hotkey enabled).", g_EnableCustomUI ? 1 : 0);
+    } else {
+        LogMsg("[UI] WARNING: Failed to hook EndFrameAndPresent (+0x20C280) for Custom UI.");
+    }
+}
+
 static void ApplyEnhancerPatchesAndHooks() {
     if (g_ExeBase == 0) return;
 
@@ -4484,6 +4871,9 @@ static void ApplyEnhancerPatchesAndHooks() {
 
     // 6. Install Widescreen 16:9 / 21:9 Menus, HUD, Radio/Cutscene Subtitles, Debriefing, Video, 3D FOV & Input hooks
     InstallWidescreenAndUiHooks();
+
+    // 7. Initialize ACZ Custom D3D12 UI Engine (Stage 1: Unified OPTIONS + ENHANCER screen, F1 hotkey)
+    InitializeCustomUiEngine();
 }
 
 // ----------------------------------------------------------------------------

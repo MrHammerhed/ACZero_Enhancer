@@ -9727,6 +9727,31 @@ extern "C" __declspec(dllexport) int __fastcall AczHdTex_GetActiveTextureAspectT
     return GetActiveTextureAspectTier();
 }
 
+extern "C" __declspec(dllexport) void __fastcall AczHdTex_ReloadRuntimeSettings() {
+    fs::path ini_path = g_ModsDir / "enhancer" / "acz_hdtex.ini";
+    std::error_code ec;
+    if (!fs::exists(ini_path, ec)) return;
+    const std::string ini_str = ini_path.string();
+
+    char pad_buf[64] = {};
+    GetPrivateProfileStringA("ACZ_HDTex", "GamepadGlyphs", "", pad_buf, sizeof(pad_buf), ini_str.c_str());
+    if (pad_buf[0] != '\0') {
+        if (_stricmp(pad_buf, "PS") == 0 || _stricmp(pad_buf, "1") == 0) {
+            g_GamepadGlyphsMode = 1;
+        } else if (_stricmp(pad_buf, "XBOX") == 0 || _stricmp(pad_buf, "2") == 0) {
+            g_GamepadGlyphsMode = 2;
+        } else if (_stricmp(pad_buf, "KB") == 0 || _stricmp(pad_buf, "KEYBOARD") == 0 || _stricmp(pad_buf, "3") == 0) {
+            g_GamepadGlyphsMode = 3;
+        } else {
+            g_GamepadGlyphsMode = 0;
+        }
+    }
+    g_HotReload   = GetPrivateProfileIntA("ACZ_HDTex", "HotReload",   g_HotReload   ? 1 : 0, ini_str.c_str()) != 0;
+    g_DumpAllGims = GetPrivateProfileIntA("ACZ_HDTex", "DumpAllGims", g_DumpAllGims ? 1 : 0, ini_str.c_str()) != 0;
+    LogMsg("[ACZ_HDTex] Reloaded runtime settings from UI: GamepadGlyphs=%s, HotReload=%d, DumpAllGims=%d",
+           GetGamepadGlyphsConfigModeStr(g_GamepadGlyphsMode), g_HotReload ? 1 : 0, g_DumpAllGims ? 1 : 0);
+}
+
 // ----------------------------------------------------------------------------
 // Minimal x64 Detour Installer
 // ----------------------------------------------------------------------------

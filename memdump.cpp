@@ -945,6 +945,24 @@ static bool InstallDetour64(
     if (prologue_len < 14 || prologue_len > 32 || (prologue_len + 14) > kTrampAllocSize) return false;
 
     const uint8_t* target_bytes = reinterpret_cast<const uint8_t*>(target_addr);
+    static const uint8_t kAbsJmpPrefix[6] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    if (std::memcmp(target_bytes, kAbsJmpPrefix, 6) == 0) {
+        // Sibling ASI (e.g. enhancer.asi) already installed a 14-byte absolute jump detour here.
+        // Chain cleanly by saving its destination as our trampoline and updating the target address.
+        void* prev_hook = *reinterpret_cast<void* const*>(target_addr + 6);
+        DWORD old_protect = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(target_addr), 14, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            return false;
+        }
+        WriteAbsoluteJump64(reinterpret_cast<void*>(target_addr), hook_fn);
+        VirtualProtect(reinterpret_cast<void*>(target_addr), 14, old_protect, &old_protect);
+        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target_addr), 14);
+        *out_trampoline = prev_hook;
+        LogMsg("[MemDump] Chained hook '%s' at %p -> prev=%p",
+               name, reinterpret_cast<void*>(target_addr), prev_hook);
+        return true;
+    }
+
     if (std::memcmp(target_bytes, expected_prologue, prologue_len) != 0) {
         LogMsg("[MemDump] WARNING: Prologue mismatch at %s (%p)!", name, reinterpret_cast<void*>(target_addr));
         return false;

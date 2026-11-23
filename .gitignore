@@ -1,6 +1,7 @@
 # Visual Studio build artifacts & caches
 .vs/
 build/
+third_party/
 x64/
 Debug/
 Release/
