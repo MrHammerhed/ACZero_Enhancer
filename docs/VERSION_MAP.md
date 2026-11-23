@@ -75,6 +75,7 @@ Why did `.text` shift piecewise?
 | `CreateTextureFromPngMemory` | `0x00214420` | `0x00214AA0` | `+0x0680` | `40 55 53 56 57 41 54 41` |
 | `EngineAlloc` | `0x00200DE0` | `0x00201460` | `+0x0680` | `48 89 5C 24 08 48 89 74` |
 | `LoadSwadArchive` | `0x00204440` | `0x00204AC0` | `+0x0680` | `48 89 5C 24 10 48 89 6C` |
+| `D3D12TexturePoolTable` (`.rdata`) | `0x002A9DE0` | `0x002ABE20` | `+0x2040` | `00 00 00 04 01 00 00 00` |
 | `GameOptions` (`.data`) | `0x0031DFC8` | `0x00320FC8` | `+0x3000` | — |
 | `EngineAllocCtx` (`.data`) | `0x0032C8F8` | `0x0032F918` | `+0x3020` | — |
 | `GlobalPs2GsVramPtr` (`.data`) | `0x0031CF18` | `0x0031FF18` | `+0x3000` | — |

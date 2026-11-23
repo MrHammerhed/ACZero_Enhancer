@@ -37,7 +37,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* ENHANCER_VERSION_STR = "v0.24";
+static constexpr const char* ENHANCER_VERSION_STR = "v0.24.1";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -4458,6 +4458,65 @@ extern "C" __declspec(dllexport) void __fastcall AczEnhancer_WriteStateSummary(c
 // ----------------------------------------------------------------------------
 // Initialization
 // ----------------------------------------------------------------------------
+static void LogV2001Diagnostics(uintptr_t exe_base) {
+    if (g_AczVersion != AczExeVersion::V2_0_0_1 || exe_base == 0) return;
+    __try {
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] === Detailed Steam v2.0.0.1 Startup Diagnostics ===");
+        if (*reinterpret_cast<const uint16_t*>(exe_base) == 0x5A4Du) {
+            const uint32_t lfanew = *reinterpret_cast<const uint32_t*>(exe_base + 0x3Cu);
+            if (lfanew >= 0x40u && lfanew < 0x1000u) {
+                const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(exe_base + lfanew);
+                LogMsg("[Enhancer] [V2.0.0.1-DIAG] PE: TimeDateStamp=0x%08X, SizeOfImage=0x%08X, EntryPoint=0x%08X, Sections=%u",
+                       nt->FileHeader.TimeDateStamp,
+                       nt->OptionalHeader.SizeOfImage,
+                       nt->OptionalHeader.AddressOfEntryPoint,
+                       nt->FileHeader.NumberOfSections);
+                const auto* sec = IMAGE_FIRST_SECTION(nt);
+                for (WORD i = 0; i < nt->FileHeader.NumberOfSections && i < 16; ++i) {
+                    char sname[9] = {};
+                    std::memcpy(sname, sec[i].Name, 8);
+                    LogMsg("[Enhancer] [V2.0.0.1-DIAG]   Sec[%u] %-8s VA=0x%08X VS=0x%08X",
+                           static_cast<unsigned>(i), sname, sec[i].VirtualAddress, sec[i].Misc.VirtualSize);
+                }
+            }
+        }
+        const uintptr_t pool_rva = AczRva(0x2A9DE0u);
+        const uint32_t* pool_tbl = reinterpret_cast<const uint32_t*>(exe_base + pool_rva);
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] pool_tbl @ RVA +0x%06llX: [0]=0x%08X (%u), [1]=0x%08X (%u), [2]=0x%08X (%u), [3]=0x%08X (%u), [4]=0x%08X (%u), [5]=0x%08X (%u)",
+               static_cast<unsigned long long>(pool_rva),
+               pool_tbl[0], pool_tbl[1], pool_tbl[2], pool_tbl[3],
+               pool_tbl[4], pool_tbl[5], pool_tbl[6], pool_tbl[7],
+               pool_tbl[8], pool_tbl[9], pool_tbl[10], pool_tbl[11]);
+
+        const uintptr_t fps_rva = AczRva(0x20BCAFu);
+        const uint8_t* fps_p = reinterpret_cast<const uint8_t*>(exe_base + fps_rva);
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] 60FPS site @ +0x%06llX: %02X %02X %02X %02X %02X %02X %02X %02X",
+               static_cast<unsigned long long>(fps_rva),
+               fps_p[0], fps_p[1], fps_p[2], fps_p[3], fps_p[4], fps_p[5], fps_p[6], fps_p[7]);
+
+        const uintptr_t scr_rva = AczRva(RVA_ScreenSizeOption);
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] ScreenSizeOption @ +0x%06llX = %d",
+               static_cast<unsigned long long>(scr_rva),
+               *reinterpret_cast<const int32_t*>(exe_base + scr_rva));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] Exception caught while dumping PE/RVA diagnostics.");
+    }
+}
+
+static void LogV2001PostPatchPoolTbl(uintptr_t exe_base) {
+    if (g_AczVersion != AczExeVersion::V2_0_0_1 || exe_base == 0) return;
+    __try {
+        const uintptr_t pool_rva = AczRva(0x2A9DE0u);
+        const uint32_t* pool_tbl = reinterpret_cast<const uint32_t*>(exe_base + pool_rva);
+        LogMsg("[Enhancer] [V2.0.0.1-DIAG] Post-patch pool_tbl @ +0x%06llX: [0]=0x%08X(%u) [1]=0x%08X(%u) [2]=0x%08X(%u) [3]=0x%08X(%u) [4]=0x%08X(%u) [5]=0x%08X(%u)",
+               static_cast<unsigned long long>(pool_rva),
+               pool_tbl[0], pool_tbl[1], pool_tbl[2], pool_tbl[3],
+               pool_tbl[4], pool_tbl[5], pool_tbl[6], pool_tbl[7],
+               pool_tbl[8], pool_tbl[9], pool_tbl[10], pool_tbl[11]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static void InitializeEnhancerPlugin(const AczAddonApi* api) {
     bool expected = false;
     if (!g_PluginInitialized.compare_exchange_strong(expected, true)) {
@@ -4506,7 +4565,9 @@ static void InitializeEnhancerPlugin(const AczAddonApi* api) {
         *reinterpret_cast<int32_t*>(g_ExeBase + AczRva(RVA_ScreenSizeOption)) = g_ScreenAspect;
     }
 
+    LogV2001Diagnostics(g_ExeBase);
     ApplyEnhancerPatchesAndHooks();
+    LogV2001PostPatchPoolTbl(g_ExeBase);
 }
 
 // ----------------------------------------------------------------------------

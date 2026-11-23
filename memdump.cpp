@@ -40,7 +40,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.5";
+static constexpr const char* MEMDUMP_VERSION_STR = "v0.16.6";
 
 // ----------------------------------------------------------------------------
 // Dual-Version Executable Detection & RVA Mapper (v1.0.2.1 & v2.0.0.1)
@@ -1462,6 +1462,15 @@ static void InitializeMemDumpPlugin(const AczAddonApi* api) {
     LogMsg("[MemDump] ================================================================");
     LogMsg("[MemDump] Game executable base: %p (Detected version: %s)",
            reinterpret_cast<void*>(g_ExeBase), GetAczExeVersionString(g_AczVersion));
+    if (g_AczVersion == AczExeVersion::V2_0_0_1 && g_ExeBase != 0) {
+        LogMsg("[MemDump] [V2.0.0.1-DIAG] Resolved RVAs: EndFrameAndPresent=+0x%06llX, IAT_ExitProcess=+0x%06llX, IAT_PostQuitMessage=+0x%06llX, CmdList=+0x%06llX, SwapChainCtx=+0x%06llX, UploadRingOff=+0x%06llX",
+               static_cast<unsigned long long>(AczRva(RVA_EndFrameAndPresent)),
+               static_cast<unsigned long long>(AczRva(RVA_IAT_ExitProcess)),
+               static_cast<unsigned long long>(AczRva(RVA_IAT_PostQuitMessage)),
+               static_cast<unsigned long long>(AczRva(RVA_GlobalD3D12CmdList)),
+               static_cast<unsigned long long>(AczRva(RVA_GlobalD3D12Context)),
+               static_cast<unsigned long long>(AczRva(RVA_GlobalUploadRingOffset)));
+    }
     LogMsg("[MemDump] Config file:          %s", g_MemDumpIniPath.string().c_str());
     LogMsg("[MemDump] Memory dumps folder:  %s", g_MemoryDumpOutDir.string().c_str());
     LogMsg("[MemDump] Config: EnableLogging=%d, EnableMemoryDump=%d, EnableF2MemoryDump=%d, DumpMemoryOnExit=%d, SaveScreenshotOnDump=%d, AutoDeleteOldDumps=%d, MaxDumpAgeHours=%d, WriteMinidumpFile=%d, FullMemoryMinidump=%d, DumpLiveResourcesOnMemoryDump=%d",

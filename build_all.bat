@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ============================================================================
-echo  ACZero Enhancer (v0.24) — Visual Studio 2026 / 2022 One-Click Build Script
-echo  Targets: version.dll (v0.1), enhancer.asi (v0.24), acz_hdtex.asi (v0.23.6), memdump.asi (v0.16.5)
+echo  ACZero Enhancer (v0.24.1) — Visual Studio 2026 / 2022 One-Click Build Script
+echo  Targets: version.dll (v0.1), enhancer.asi (v0.24.1), acz_hdtex.asi (v0.24.1), memdump.asi (v0.16.6)
 echo ============================================================================
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"

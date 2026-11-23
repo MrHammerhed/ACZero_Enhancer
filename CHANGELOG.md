@@ -1,4 +1,4 @@
-# ACZero Enhancer (v0.24) — Project Changelog and File Registry
+# ACZero Enhancer (v0.24.1) — Project Changelog and File Registry
 
 This document provides a registry of all modules, plugins, and tools for the **ACZero Enhancer** project for the standalone PC port of *Ace Combat Zero: The Belkan War*, along with the version history for each file.
 
@@ -103,6 +103,11 @@ Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, 
     * **`FastStartup=1`:** Bypasses the native launcher (`e.arc` mount & dialog) and controller manual screen (`CModePadManual` at `AczRva(0x16348B)`), and installs `Hook_CModeWakeLogoUpdate` (`AczRva(0x17DC30)`) so pressing any gamepad or keyboard button (`Enter` / `Space` / `Esc`) during intro logos cleanly transitions directly to the Title Screen (`CModeTitle`, `+0x1782B0`) with brief input suppression to prevent accidental auto-advance.
     * **`FastStartup=2`:** Level 1 + removes the 2×30-frame (~1.0s) artificial Memory Card UI timers in `CSelectMemorycard` (`modeWake` at `AczRva(0x1C3000)` and `modeLoad` at `AczRva(0x1C2B27)`) and automatically redirects post-save boot (`AczRva(0x17D513)`) straight to the Title Screen (`CModeTitle`).
     * **`FastStartup=3`:** Level 2 + automatically skips both intro logos and the Title Screen straight into the Main Menu (`CModeMainSelect`, `+0x178330`).
+
+* **v0.24.1 (Steam `v2.0.0.1` Startup Diagnostics & `acz_version_map.h` Sync):**
+
+  * Added detailed `[V2.0.0.1-DIAG]` startup diagnostics (PE header/sections, pre/post-patch `pool_tbl` dump, 60 FPS site bytes, and `ScreenSizeOption`) logged to `mods\enhancer\enhancer.log` whenever `acz.exe` `v2.0.0.1` is detected.
+  * Synced `acz_version_map.h` with the `.rdata` `< 0x2CEEF0` `+0x2040` shift (`D3D12TexturePoolTable` `0x2A9DE0 -> 0x2ABE20`).
 
 ### 2.2. `acz_hdtex.cpp` (`mods\enhancer\acz_hdtex.asi`) — Current Version: **v0.24**
 
@@ -212,6 +217,12 @@ Independent HD texture and font injection/dumping plugin for `version.dll` (v1.2
 
   * **`.jpg` / `.jpeg` Texture Support:** Extended `ScanTexturesDirectory()` and WIC decoding to load `.jpg` and `.jpeg` replacement textures alongside `.png`, significantly reducing disk and archive footprint for large HD terrain packs (`mods\textures\terrain\`).
 
+* **v0.24.1 (DDS Cache Startup Crash Guard, Safe PNG Fallback & `v2.0.0.1` Diagnostics):**
+
+  * **SEH Crash Guard & Automatic PNG Fallback (`SafeAllocatePooledTextureSeh`):** Wrapped `g_AllocatePooledTexture` inside `LoadTextureFromDdsCacheFile` in a POD SEH guard. If a GPU/driver, Steam `v2.0.0.1`, or Linux Proton setup throws an exception (`0xC0000005`) during `.dds_cache` texture allocation, `acz_hdtex.asi` logs the exact texture, dimensions, format, executable version, and `UploadRingOffset`, disables `.dds_cache` for the current session, and falls back cleanly to `CreateTextureFromPngMemory` without crashing.
+  * **Explicit `EnableDdsCache=1` in `mods\enhancer\acz_hdtex.ini`:** Exposed `EnableDdsCache` directly in the default configuration and updated legacy `modloader.log` comments to `mods\enhancer\enhancer.log`.
+  * **Steam `v2.0.0.1` Diagnostics (`[V2.0.0.1-DIAG]`):** Logs resolved D3D12/GS/Terrain function addresses & prologue bytes, `pool_tbl` values, per-hook status mask (`ok1..ok11`) on failure, and the first 32 DDS allocations when `acz.exe` `v2.0.0.1` is detected.
+
 ### 2.3. `memdump.cpp` (`mods\enhancer\memdump.asi`) — Current Version: **v0.16.5**
 
 Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer capture plugin. Configuration is stored in `mods\enhancer\memdump.ini`, dumps are saved to `mods\memory_dumps\`.
@@ -271,6 +282,10 @@ Independent diagnostic crash logger, memory dumper, and D3D12 framebuffer captur
 * **v0.16.5 (Custom `version.dll` ASI Loader & Shared `mods\enhancer\enhancer.log`):**
 
   * Migrated build target to `mods\enhancer\memdump.asi` (exporting both `AczAddonInit` and `InitializeASI`) for the custom `version.dll` (v0.1) loader, updated sibling runtime bridges to query `enhancer.asi` and `acz_hdtex.asi`, and unified logging into `mods\enhancer\enhancer.log`.
+
+* **v0.16.6 (Steam `v2.0.0.1` Diagnostic RVA Logging):**
+
+  * Added `[V2.0.0.1-DIAG]` startup logging of resolved `EndFrameAndPresent`, IAT, and D3D12 global RVAs in `mods\enhancer\enhancer.log` when Steam `acz.exe` `v2.0.0.1` is detected.
 
 ### 2.4. `version_loader.cpp` (`version.dll`) — Current Version: **v0.1**
 

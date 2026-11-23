@@ -39,7 +39,7 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------------
 // Configuration & Constants
 // ----------------------------------------------------------------------------
-static constexpr const char* PLUGIN_VERSION_STR = "v0.23.6";
+static constexpr const char* PLUGIN_VERSION_STR = "v0.24.1";
 static constexpr uint16_t    CUSTOM_EXTRATEX_TAG = 0x7FFF;
 static constexpr uint32_t    MAX_CUSTOM_TEXTURES = 65535;
 static constexpr uint64_t    FNV1A_64_OFFSET     = 0xCBF29CE484222325ULL;
@@ -1909,6 +1909,23 @@ static bool BuildOrUpdateDdsCacheForPng(
 }
 
 // Loads a cached .dds texture directly into acz.exe's D3D12 placed-resource pool & upload queue
+static uint8_t* SafeAllocatePooledTextureSeh(
+    uint32_t  w,
+    uint32_t  h,
+    uint32_t  array_size,
+    uint32_t  fmt,
+    uint32_t* out_exc_code
+) {
+    if (out_exc_code) *out_exc_code = 0u;
+    if (!g_AllocatePooledTexture) return nullptr;
+    __try {
+        return g_AllocatePooledTexture(w, h, array_size, fmt, 0ull, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (out_exc_code) *out_exc_code = GetExceptionCode();
+        return nullptr;
+    }
+}
+
 static uint8_t* LoadTextureFromDdsCacheFile(
     const fs::path& dds_path,
     uint64_t expected_src_mtime,
@@ -1957,8 +1974,33 @@ static uint8_t* LoadTextureFromDdsCacheFile(
         return nullptr;
     }
 
-    uint8_t* hd_tex = g_AllocatePooledTexture(w, h, 1u, fmt, 0ull, nullptr);
+    if (g_AczVersion == AczExeVersion::V2_0_0_1) {
+        static std::atomic<uint32_t> s_v2_alloc_log_cnt{0};
+        uint32_t n = s_v2_alloc_log_cnt.fetch_add(1u, std::memory_order_relaxed);
+        if (n < 32u) {
+            uint64_t ring_off = g_UploadOffPtr ? (*g_UploadOffPtr) : 0ULL;
+            LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG] DDS Alloc #%u: %ux%u fmt=%u (UploadRing=0x%llX) -> %s",
+                   n + 1u, w, h, fmt, static_cast<unsigned long long>(ring_off), dds_path.filename().string().c_str());
+        }
+    }
+
+    uint32_t alloc_exc = 0u;
+    uint8_t* hd_tex = SafeAllocatePooledTextureSeh(w, h, 1u, fmt, &alloc_exc);
+    if (alloc_exc != 0u) {
+        uint64_t ring_off = g_UploadOffPtr ? (*g_UploadOffPtr) : 0ULL;
+        LogMsg("[ACZ_HDTex] ERROR: AllocatePooledTexture(%ux%u, fmt=%u) threw SEH exception 0x%08X for %s (ver=%s, UploadRing=0x%llX) — disabling DDS cache for this session and falling back to PNG loader!",
+               w, h, fmt, alloc_exc, dds_path.filename().string().c_str(),
+               GetAczExeVersionString(g_AczVersion),
+               static_cast<unsigned long long>(ring_off));
+        g_EnableDdsCache = false;
+        fclose(df);
+        return nullptr;
+    }
     if (!hd_tex) {
+        if (g_AczVersion == AczExeVersion::V2_0_0_1) {
+            LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG] WARNING: AllocatePooledTexture(%ux%u, fmt=%u) returned NULL for %s",
+                   w, h, fmt, dds_path.filename().string().c_str());
+        }
         fclose(df);
         return nullptr;
     }
@@ -9900,6 +9942,49 @@ static void InstallControlsManualAndPadHooks() {
     }
 }
 
+static void LogV2001FnBytesSeh(const char* name, uintptr_t addr) {
+    if (!addr) {
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG]   %-28s = NULL", name);
+        return;
+    }
+    __try {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(addr);
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG]   %-28s @ %p (RVA +0x%06llX) bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+               name, reinterpret_cast<void*>(addr),
+               static_cast<unsigned long long>(addr - g_ExeBase),
+               p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG]   %-28s @ %p (READ FAULT)", name, reinterpret_cast<void*>(addr));
+    }
+}
+
+static void LogV2001HdTexDiagnostics() {
+    if (g_AczVersion != AczExeVersion::V2_0_0_1 || g_ExeBase == 0) return;
+    __try {
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG] === Detailed Steam v2.0.0.1 D3D12 / Hook Diagnostics ===");
+        LogV2001FnBytesSeh("CreateTextureFromPngMemory", reinterpret_cast<uintptr_t>(g_CreateTextureFromPngMemory));
+        LogV2001FnBytesSeh("AllocatePooledTexture",      reinterpret_cast<uintptr_t>(g_AllocatePooledTexture));
+        LogV2001FnBytesSeh("UploadTextureToGpu",         reinterpret_cast<uintptr_t>(g_UploadTextureToGpu));
+        LogV2001FnBytesSeh("DestroyPooledTexture",       reinterpret_cast<uintptr_t>(g_DestroyPooledTexture));
+        LogV2001FnBytesSeh("EngineMalloc",               reinterpret_cast<uintptr_t>(g_EngineMalloc));
+        LogV2001FnBytesSeh("UploadTerrainTextureArray",  g_ExeBase + AczRva(RVA_UploadTerrainTextureArray));
+        const uintptr_t pool_rva = AczRva(0x2A9DE0u);
+        const uint32_t* pool_tbl = reinterpret_cast<const uint32_t*>(g_ExeBase + pool_rva);
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG]   pool_tbl @ +0x%06llX: [0]=0x%08X(%u) [1]=0x%08X(%u) [2]=0x%08X(%u) [3]=0x%08X(%u) [4]=0x%08X(%u) [5]=0x%08X(%u)",
+               static_cast<unsigned long long>(pool_rva),
+               pool_tbl[0], pool_tbl[1], pool_tbl[2], pool_tbl[3],
+               pool_tbl[4], pool_tbl[5], pool_tbl[6], pool_tbl[7],
+               pool_tbl[8], pool_tbl[9], pool_tbl[10], pool_tbl[11]);
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG]   g_TerrainTexArrayPtr=%p (+0x%06llX), g_UploadOffPtr=%p (+0x%06llX)",
+               reinterpret_cast<void*>(g_TerrainTexArrayPtr),
+               g_TerrainTexArrayPtr ? static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_TerrainTexArrayPtr) - g_ExeBase) : 0ULL,
+               reinterpret_cast<void*>(g_UploadOffPtr),
+               g_UploadOffPtr ? static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_UploadOffPtr) - g_ExeBase) : 0ULL);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LogMsg("[ACZ_HDTex] [V2.0.0.1-DIAG] Exception caught while dumping v2.0.0.1 diagnostics.");
+    }
+}
+
 static void InitializePlugin(const AczAddonApi* api) {
     bool expected = false;
     if (!g_PluginInitialized.compare_exchange_strong(expected, true)) {
@@ -9974,6 +10059,7 @@ static void InitializePlugin(const AczAddonApi* api) {
     );
 
     EnsureD3D12TexturePoolsExpanded();
+    LogV2001HdTexDiagnostics();
     acz_installer::AutoInstallTexturePacksIfPresent(
         g_ModsDir,
         g_TexturesDir,
@@ -10088,7 +10174,8 @@ static void InitializePlugin(const AczAddonApi* api) {
     if (ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && ok7 && ok8 && ok9 && ok10 && ok11) {
         LogMsg("[ACZ_HDTex] All 11 texture & font hooks installed! Ready to replace GIM, FHM, TIM2/SWAD, Dynamic GameFont, Master Atlas, .arc extratex, and native Terrain Texture2DArray.");
     } else {
-        LogMsg("[ACZ_HDTex] WARNING: One or more texture hooks failed to install.");
+        LogMsg("[ACZ_HDTex] WARNING: One or more texture hooks failed to install (ok1=%d ok2=%d ok3=%d ok4=%d ok5=%d ok6=%d ok7=%d ok8=%d ok9=%d ok10=%d ok11=%d).",
+               ok1?1:0, ok2?1:0, ok3?1:0, ok4?1:0, ok5?1:0, ok6?1:0, ok7?1:0, ok8?1:0, ok9?1:0, ok10?1:0, ok11?1:0);
     }
 }
 

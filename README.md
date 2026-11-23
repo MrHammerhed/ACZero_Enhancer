@@ -1,4 +1,4 @@
-# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.24)
+# ACZero Enhancer — Widescreen 16:9/21:9, HD Texture, Font & Input Suite (v0.24.1)
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](https://microsoft.com/windows)
@@ -74,9 +74,10 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 ## Installation Guide
 
 ### Step 1: Install ACZero Enhancer (`version.dll` + `mods\enhancer\*.asi`)
-* Download the latest release (`ACZero_Enhancer_v0.24_Release.zip`) from [Releases](../../releases).
-* Extract `version.dll` and the `mods\` folder directly into your game root directory (next to `acz.exe`).
+* Download the latest release (`ACZero_Enhancer_v0.24.1_Release.zip`) from [Releases](../../releases).
+* Extract `version.dll` and the `mods\` folder directly into your game root directory (next to `acz.exe`, usually inside the `ACZero\` subfolder).
 * *(Optional)* If you also use the legacy `version.dll` (`ACE COMBAT ZERO mod loader 1.2`) for `.arc` mods, simply rename the old `version.dll` to `version_orig.dll` next to `acz.exe`.
+* *(Linux / Steam Deck)* Add `WINEDLLOVERRIDES="version=n,b" %command%` to your Steam Launch Options so Proton loads `version.dll`.
 
 ### Step 2: Install HD Textures (OstrichMods HUD Upgrade)
 1. Download `actrilogy-hud-upgrade-v1.2.1.zip` from the official [OstrichMods Trilogy page](https://ostrichmods.com/trilogy.html).

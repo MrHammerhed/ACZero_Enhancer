@@ -91,6 +91,7 @@ inline uintptr_t AczResolveRva(uintptr_t rva_1021, AczExeVersion ver) {
     // 2. .rdata IAT & constants (0x27B000 .. 0x308FFF in 1.0.2.1)
     if (rva_1021 == 0x0027B2E8u) return 0x0027D2F8u; // IAT ExitProcess
     if (rva_1021 == 0x0027B6F0u) return 0x0027D6E8u; // IAT PostQuitMessage
+    if (rva_1021 < 0x002CEEF0u) return rva_1021 + 0x2040u; // Early .rdata tables (e.g. D3D12 pool_tbl 0x2A9DE0 -> 0x2ABE20)
     if (rva_1021 >= 0x00308F00u && rva_1021 < 0x00309000u) {
         return rva_1021 + 0x2600u; // .rdata zero-padded float cave (0x308F00 -> 0x30B500)
     }
