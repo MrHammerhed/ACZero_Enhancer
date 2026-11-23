@@ -23,26 +23,49 @@ All ASI plugins located in the `mods\enhancer\` directory are automatically load
 | **`py\ACZ_SWAD_Converter.py`** | **v1.0.1** | Python Tool | `py\` | Container unpacker/packer and automated 16:9 / 21:9 widescreen layout generator for `.swa` (`SWAD` / `SWG`) menu archives. |
 | **`py\ACZ_SWG_Visual_Editor.py`** | **v1** | Python Tool | `py\` | Interactive WYSIWYG GUI editor for `.swa` / `.swg` menu layouts, timelines, and matrix transformations (`4:3`, `16:9`, `21:9`). |
 | **`py\ACZ_Terrain_Converter.py`** | **v1.0** | Python Tool | `py\` | Seamless context-padded `512x512` terrain sheet exporter (`mXX.mtd`/`.mtc`/`.mti`/`.mta`) and `4x` HD tile slicer (`256x256` FNV-1a hashed tiles) for `acz_hdtex.asi`. |
+| **`py\build_radial_fog_shaders.py`** | **v1.0** | Python Tool | `py\`, `py\shaders\` | Compiles HLSL SM 6.0 spherical radial fog overrides (`DrawMesh_g.hlsl`, `DrawACM_v.hlsl`, `DrawTree_v.hlsl`) via DXC into `acz_radial_fog_shaders.h`. |
 
 ## 2. Component Changelogs
 
-### 2.1. `enhancer.cpp` (`mods\enhancer\enhancer.asi`) — Current Version: **v0.24**
+### 2.1. `enhancer.cpp` (`mods\enhancer\enhancer.asi`) — Current Version: **v0.25**
 
-Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, subtitles, and 3D FOV), controller input engine, and 60 FPS frame-pacing plugin for `version.dll` (v1.2). Configuration is stored in `mods\enhancer\enhancer.ini`. Operates fully standalone or in synergy with `acz_hdtex.dll`.
+Independent widescreen display adaptation (`16:9` & `21:9` menus, gameplay HUD, subtitles, and 3D FOV), extended `DrawDistance` & spherical `RadialFog` engine, controller input engine, multi-stage `FastStartup`, and 60 FPS frame-pacing plugin for `version.dll` (v0.1). Configuration is stored in `mods\enhancer\enhancer.ini`. Operates fully standalone or in synergy with `acz_hdtex.asi`.
 
 * **v0.1 – v0.15 (Base Memory Patching & Modloader Integration):**
 
   * Established modloader integration via `AczAddonInit` and safe virtual memory patching and x64 detour architecture.
 
-* **v0.21 (Modular Architecture & D3D12 Ring Buffer Expansion):**
+* **v0.18 (Native Stage Environment Presets):**
+
+  * Implemented native x64 ports of ACZGCT stage environment presets (`04_acz_extended_modifications.lua` curated 864-byte stage environment blocks for campaign missions and terrain clipping fixes).
+
+* **v0.19 – v0.20 (Draw Distance Scaling):**
+
+  * Added draw distance scaling across all 17 distance floats in stage environment blocks, camera `FarZ` (`+0x10`), and `RenderTerrain` inner/outer fade constants.
+
+* **v0.21 (Draw Distance Overhaul, Modular Architecture & D3D12 Stability Hardening):**
 
   * Separated diagnostic memory dumper into standalone `memdump.dll` and core engine into `enhancer.dll` (`mods\enhancer\enhancer.ini`).
 
+  * Expanded coarse terrain tile grid (`19x19` at `2x`) via `RenderExpandedCoarseTerrainGrid`.
+
   * Expanded D3D12 upload ring buffers 4x (48MB/16MB), `DrawMeshTemp` instance reservation 4x (3.86MB), and `InitCPT` VB 4x (328KB), eliminating D3D12 device removal crashes under heavy rendering loads.
+
+  * Overhauled dynamic cloud shadow map to full `524,288m x 524,288m` 1:1 WRAP coverage anchored at world origin `(0, 0)`, eliminating camera-step shadow jumps.
+
+  * Fixed ground emitter array overflow during cutscenes and replays; scaled camera `FarZ` across all 20 camera sites to eliminate skybox corner clipping.
 
 * **v0.21.1 (Dual-Version Executable Support):**
 
-  * Integrated `AczRva` across all hooks and memory patches for automatic compatibility with both `v1.0.2.1` and `v2.0.0.1`.
+  * Integrated `AczRva` and automatic RIP-relative `disp32` adjustment across all hooks and memory patches for automatic compatibility with both `v1.0.2.1` and `v2.0.0.1`.
+
+* **v0.22 (Procedural OOB Terrain Clamping):**
+
+  * Added precomputed O(1) 2D-mirrored + procedural fractal out-of-bounds terrain extension with CPU-cached D3D12 hardware UV-mirroring (`Hook_DrawMeshTemp` & `Hook_FlushMeshTemp`), eliminating write-combined RAM stalls.
+
+* **v0.22.1 (Initial Fast Startup Mode):**
+
+  * Added initial `FastStartup` mode skipping the native launcher check, controller manual screen, intro logos, and title screen (later expanded into multi-stage `FastStartup=0..3` in `v0.24`).
 
 * **v0.23.0 (Widescreen 16:9 & 21:9 Menu Engine):**
 

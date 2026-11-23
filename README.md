@@ -72,6 +72,7 @@ A modular, high-performance widescreen (`16:9` & `21:9`), HD texture, font repla
 * **`ACZ_GIM_PNG_Converter.py` (v5)**: Two-way converter for 4-bit (`PSMT4`) and 8-bit (`PSMT8`) `.gim` files with `FNV-1a` 64-bit hashing.
 * **`ACZ_SWAD_Converter.py` (v1)** & **`ACZ_SWG_Visual_Editor.py` (v1)**: Unpacker/packer, automated 16:9/21:9 menu layout generator, and interactive WYSIWYG visual editor for `.swa` / `.swg` menu archives.
 * **`ACZ_Terrain_Converter.py` (v1.0)**: Exports seamless context-padded `512x512` terrain sheets from `mXX.mtd`/`.mtc`/`.mti`/`.mta` containers for `4x` AI upscaling (`2048x2048`) and slices them back into `256x256` FNV-1a hashed tiles for `acz_hdtex.asi`.
+* **`build_radial_fog_shaders.py` (v1.0)**: Compiles HLSL SM 6.0 spherical radial fog shader overrides (`py/shaders/DrawMesh_g.hlsl`, `DrawACM_v.hlsl`, `DrawTree_v.hlsl`) via `dxc.exe` into `acz_radial_fog_shaders.h`.
 
 ---
 
@@ -122,7 +123,7 @@ If you want to contribute HD textures, report replacement bugs, or help with C++
 ## Future Plans
 
 The following features and expansions are planned for future development:
-* **Extended Render Distance**: Increasing camera clip planes, terrain LOD thresholds, and fog distances.
+* **Custom D3D12 Terrain & Atmospheric Skybox Renderer**: Replacing the PS2-era terrain and skybox pipeline to break past the native `2x` draw distance ceiling, enabling 30–100 km horizons, planetary curvature, close-range PBR terrain materials, and procedural atmospheric scattering.
 * **DualSense Controller Support**: Native haptic feedback and adaptive trigger effects.
 * **Quality-of-Life (QoL) Patches**: Additional HUD options, control enhancements, and exiting the game from the Main Menu by holding both sticks (`L3 + R3`) with a confirmation dialog.
 * **Graphical Settings Manager**: Standalone GUI configurator for tuning graphics, texture options, and patches.
