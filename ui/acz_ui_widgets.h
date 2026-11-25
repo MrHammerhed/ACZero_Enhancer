@@ -108,7 +108,8 @@ public:
         const bool rawToggle  = keyDown(VK_F1);
 
         if (keyDown(VK_UP) || keyDown(VK_DOWN) || keyDown(VK_LEFT) || keyDown(VK_RIGHT) ||
-            keyDown(VK_RETURN) || keyDown(VK_ESCAPE) || keyDown('W') || keyDown('S') || keyDown('Q') || keyDown('E')) {
+            keyDown(VK_RETURN) || keyDown(VK_ESCAPE) || keyDown('W') || keyDown('S') ||
+            keyDown('A') || keyDown('D') || keyDown('Q') || keyDown('E') || keyDown('R')) {
             m_Device = InputDeviceKind::Keyboard;
         }
 

@@ -68,27 +68,37 @@ struct UiBatch {
 };
 
 struct UiTextureSlot {
-    ID3D12Resource* gpuTex      = nullptr;
-    ID3D12Resource* uploadBuf   = nullptr;
-    uint8_t*        uploadPtr   = nullptr;
-    uint32_t        width       = 0;
-    uint32_t        height      = 0;
-    uint32_t        rowPitch    = 0;
-    uint32_t        bpp         = 4;
-    DXGI_FORMAT     format      = DXGI_FORMAT_R8G8B8A8_UNORM;
-    bool            initialized = false;
-    bool            dirty       = false;
-    bool            inUse       = false;
+    ID3D12Resource* gpuTex         = nullptr;
+    ID3D12Resource* uploadBuf      = nullptr;
+    uint8_t*        uploadPtr      = nullptr;
+    uint32_t        width          = 0;
+    uint32_t        height         = 0;
+    uint32_t        rowPitch       = 0;
+    uint32_t        bpp            = 4;
+    DXGI_FORMAT     format         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    bool            initialized    = false;
+    bool            dirty          = false;
+    bool            inUse          = false;
+    uint64_t        freeAfterFrame = 0;
+};
+
+struct UiDeferredRelease {
+    ID3D12Resource* resource    = nullptr;
+    uint64_t        retireFrame = 0;
 };
 
 class UiRenderer {
 public:
-    static constexpr uint32_t kMaxTextures   = 64;
+    static constexpr uint32_t kMaxTextures   = 256;
     static constexpr uint32_t kMaxVertices   = 65536;
     static constexpr uint32_t kMaxIndices    = 131072;
     static constexpr uint32_t kTexSlotWhite  = 0;
 
     bool IsReady() const { return m_Initialized; }
+    void InvalidateBackbuffers() {
+        m_CachedBackbuffers[0] = nullptr;
+        m_CachedBackbuffers[1] = nullptr;
+    }
     uint32_t ScreenWidth()  const { return m_Width; }
     uint32_t ScreenHeight() const { return m_Height; }
     float VirtualScale() const { return (m_Height > 0) ? (static_cast<float>(m_Height) / 1080.0f) : 1.0f; }
@@ -125,6 +135,22 @@ public:
             device->CreateRenderTargetView(backbuffer, nullptr, rtvHandle);
         }
 
+        ++m_FrameNumber;
+        if (!m_DeferredReleases.empty()) {
+            size_t writeIdx = 0;
+            for (size_t i = 0; i < m_DeferredReleases.size(); ++i) {
+                if (m_FrameNumber >= m_DeferredReleases[i].retireFrame) {
+                    if (m_DeferredReleases[i].resource) {
+                        m_DeferredReleases[i].resource->Release();
+                    }
+                } else {
+                    if (writeIdx != i) m_DeferredReleases[writeIdx] = m_DeferredReleases[i];
+                    ++writeIdx;
+                }
+            }
+            m_DeferredReleases.resize(writeIdx);
+        }
+
         m_CurrentFrameSlot = backbufIdx;
         m_Vertices.clear();
         m_Indices.clear();
@@ -141,8 +167,9 @@ public:
     uint32_t CreateDynamicTexture(uint32_t width, uint32_t height, DXGI_FORMAT format, uint32_t bpp) {
         if (!m_Device || width == 0 || height == 0) return 0;
         for (uint32_t i = 1; i < kMaxTextures; ++i) {
-            if (!m_Textures[i].inUse) {
+            if (!m_Textures[i].inUse && m_FrameNumber >= m_Textures[i].freeAfterFrame) {
                 if (AllocateTextureSlot(i, width, height, format, bpp)) {
+                    m_LastCreatedSlot = i;
                     return i;
                 }
                 return 0;
@@ -150,6 +177,8 @@ public:
         }
         return 0;
     }
+
+    uint32_t LastCreatedTextureSlot() const { return m_LastCreatedSlot; }
 
     // Upload raw pixels into a dynamic texture slot (queued for GPU copy at EndFrame).
     bool UpdateTexturePixels(uint32_t slot, const uint8_t* pixels, uint32_t srcRowPitch) {
@@ -173,15 +202,26 @@ public:
         if (slot == 0 || slot >= kMaxTextures) return;
         UiTextureSlot& tex = m_Textures[slot];
         if (!tex.inUse) return;
-        if (tex.uploadBuf) { tex.uploadBuf->Unmap(0, nullptr); tex.uploadBuf->Release(); tex.uploadBuf = nullptr; tex.uploadPtr = nullptr; }
-        if (tex.gpuTex)    { tex.gpuTex->Release(); tex.gpuTex = nullptr; }
-        tex.inUse = false;
-        tex.dirty = false;
-        tex.initialized = false;
+        const uint64_t retireFrame = m_FrameNumber + 4u;
+        if (tex.uploadBuf) {
+            tex.uploadBuf->Unmap(0, nullptr);
+            m_DeferredReleases.push_back(UiDeferredRelease{ tex.uploadBuf, retireFrame });
+            tex.uploadBuf = nullptr;
+            tex.uploadPtr = nullptr;
+        }
+        if (tex.gpuTex) {
+            m_DeferredReleases.push_back(UiDeferredRelease{ tex.gpuTex, retireFrame });
+            tex.gpuTex = nullptr;
+        }
+        tex.inUse          = false;
+        tex.dirty          = false;
+        tex.initialized    = false;
+        tex.freeAfterFrame = retireFrame;
     }
 
     void SetPremultipliedBlend(bool enable) { m_ActiveBlendMode = enable ? 1u : 0u; }
     void SetAdditiveBlend(bool enable)      { m_ActiveBlendMode = enable ? 2u : 0u; }
+    void SetAdditiveAlphaBlend(bool enable) { m_ActiveBlendMode = enable ? 3u : 0u; }
 
     void SetScissorPx(bool enable, int left, int top, int right, int bottom) {
         D3D12_RECT r;
@@ -354,6 +394,72 @@ public:
         PushQuadIndices(base, texSlot);
     }
 
+    // 3D Y-axis perspective-projected image strip (28 vertical slices for artifact-free perspective UV!)
+    // Positive yawRad: right edge (u=1) is CLOSER to camera (larger); negative yawRad: left edge (u=0) is closer.
+    void DrawPerspectiveImageY(
+        float vcx, float vcy, float vw, float vh,
+        float yawRad, float focalLen,
+        uint32_t texSlot, Color tint = Color(255, 255, 255, 255),
+        int slices = 28
+    ) {
+        if (slices < 2) slices = 2;
+        if (slices > 48) slices = 48;
+        const uint32_t vNeed = static_cast<uint32_t>((slices + 1) * 2);
+        const uint32_t iNeed = static_cast<uint32_t>(slices * 6);
+        if (m_Vertices.size() + vNeed > kMaxVertices || m_Indices.size() + iNeed > kMaxIndices) return;
+
+        const float s    = VirtualScale();
+        const float cxPx = vcx * s;
+        const float cyPx = vcy * s;
+        const float halfW = vw * 0.5f;
+        const float halfH = vh * 0.5f;
+        const float ca   = std::cos(yawRad);
+        const float sa   = std::sin(yawRad);
+        const float fLen = (focalLen > 200.0f) ? focalLen : 1100.0f;
+
+        const float r = tint.r / 255.0f, g = tint.g / 255.0f, b = tint.b / 255.0f, a = tint.a / 255.0f;
+        const uint32_t base = static_cast<uint32_t>(m_Vertices.size());
+
+        for (int i = 0; i <= slices; ++i) {
+            const float u      = static_cast<float>(i) / static_cast<float>(slices);
+            const float localX = (u - 0.5f) * vw;
+            const float rotX   = localX * ca;
+            // Positive yawRad -> localX > 0 (right edge) moves closer (smaller Z -> larger projection)
+            float z = fLen - localX * sa;
+            if (z < 120.0f) z = 120.0f;
+            const float persp = fLen / z;
+            const float xPx   = cxPx + rotX * persp * s;
+            const float hhPx  = halfH * persp * s;
+
+            m_Vertices.push_back(UiVertex{ xPx, cyPx - hhPx, u, 0.0f, r, g, b, a, 0u });
+            m_Vertices.push_back(UiVertex{ xPx, cyPx + hhPx, u, 1.0f, r, g, b, a, 0u });
+        }
+
+        const D3D12_RECT& clip = m_ClipStack.back();
+        if (m_Batches.empty() || m_Batches.back().texSlot != texSlot ||
+            m_Batches.back().blendMode != m_ActiveBlendMode || !RectEqual(m_Batches.back().scissor, clip)) {
+            UiBatch batch{};
+            batch.indexOffset = static_cast<uint32_t>(m_Indices.size());
+            batch.indexCount  = 0;
+            batch.texSlot     = texSlot;
+            batch.scissor     = clip;
+            batch.blendMode   = m_ActiveBlendMode;
+            m_Batches.push_back(batch);
+        }
+
+        for (int i = 0; i < slices; ++i) {
+            const uint32_t c0 = base + static_cast<uint32_t>(i * 2);
+            const uint32_t c1 = c0 + 2u;
+            m_Indices.push_back(c0);
+            m_Indices.push_back(c1);
+            m_Indices.push_back(c1 + 1u);
+            m_Indices.push_back(c0);
+            m_Indices.push_back(c1 + 1u);
+            m_Indices.push_back(c0 + 1u);
+        }
+        m_Batches.back().indexCount += iNeed;
+    }
+
     // Procedural real-time burning ember quad (pixel shader mode == 2, color = {heat, blur, seed, alpha})
     void DrawEmberQuad(
         float vcx, float vcy, float vw, float vh, float angleRad,
@@ -375,6 +481,44 @@ public:
         m_Vertices.push_back(UiVertex{ cx + rx - ux, cy + ry - uy, 1.0f, 0.0f, heat, blur, seed01, alpha, 2u });
         m_Vertices.push_back(UiVertex{ cx + rx + ux, cy + ry + uy, 1.0f, 1.0f, heat, blur, seed01, alpha, 2u });
         m_Vertices.push_back(UiVertex{ cx - rx + ux, cy - ry + uy, 0.0f, 1.0f, heat, blur, seed01, alpha, 2u });
+        PushQuadIndices(base, kTexSlotWhite);
+    }
+
+    // 3-layer soft-blurred procedural ACZ tactical grid (pixel shader mode == 3, resolution-independent)
+    void DrawTacticalGrid(float majorAlpha, float minorAlpha, float diagAlpha, float overallAlpha = 1.0f) {
+        if (m_Vertices.size() + 4 > kMaxVertices || m_Indices.size() + 6 > kMaxIndices) return;
+        const float wPx = static_cast<float>(m_Width);
+        const float hPx = static_cast<float>(m_Height);
+        const float vw  = VirtualWidth();
+        const float vh  = VirtualHeight();
+        const uint32_t base = static_cast<uint32_t>(m_Vertices.size());
+        m_Vertices.push_back(UiVertex{ 0.0f, 0.0f, 0.0f, 0.0f, majorAlpha, minorAlpha, diagAlpha, overallAlpha, 3u });
+        m_Vertices.push_back(UiVertex{ wPx,  0.0f, vw,   0.0f, majorAlpha, minorAlpha, diagAlpha, overallAlpha, 3u });
+        m_Vertices.push_back(UiVertex{ wPx,  hPx,  vw,   vh,   majorAlpha, minorAlpha, diagAlpha, overallAlpha, 3u });
+        m_Vertices.push_back(UiVertex{ 0.0f, hPx,  0.0f, vh,   majorAlpha, minorAlpha, diagAlpha, overallAlpha, 3u });
+        PushQuadIndices(base, kTexSlotWhite);
+    }
+
+    // Procedural pure optical Gaussian + anamorphic bloom quad (pixel shader mode == 5, use SetAdditiveAlphaBlend)
+    void DrawOpticalBloom(float vcx, float vcy, float vw, float vh, Color c) {
+        const float s = VirtualScale();
+        AddQuadPx((vcx - vw * 0.5f) * s, (vcy - vh * 0.5f) * s, vw * s, vh * s,
+                  0.0f, 0.0f, 1.0f, 1.0f, c, c, c, c, kTexSlotWhite, 5u);
+    }
+
+    // Procedural Belkan crimson clouds + vanilla forward-zooming mist clouds (pixel shader mode == 4)
+    void DrawTitleBackdrop(float timeSec, float cloudIntro, float logoFlash, float masterFade) {
+        if (m_Vertices.size() + 4 > kMaxVertices || m_Indices.size() + 6 > kMaxIndices) return;
+        const float wPx    = static_cast<float>(m_Width);
+        const float hPx    = static_cast<float>(m_Height);
+        const float aspect = (hPx > 0.0f) ? (wPx / hPx) : (16.0f / 9.0f);
+        const float halfU  = aspect * 0.5f;
+        const float halfV  = 0.5f;
+        const uint32_t base = static_cast<uint32_t>(m_Vertices.size());
+        m_Vertices.push_back(UiVertex{ 0.0f, 0.0f, -halfU, -halfV, timeSec, cloudIntro, logoFlash, masterFade, 4u });
+        m_Vertices.push_back(UiVertex{ wPx,  0.0f,  halfU, -halfV, timeSec, cloudIntro, logoFlash, masterFade, 4u });
+        m_Vertices.push_back(UiVertex{ wPx,  hPx,   halfU,  halfV, timeSec, cloudIntro, logoFlash, masterFade, 4u });
+        m_Vertices.push_back(UiVertex{ 0.0f, hPx,  -halfU,  halfV, timeSec, cloudIntro, logoFlash, masterFade, 4u });
         PushQuadIndices(base, kTexSlotWhite);
     }
 
@@ -491,6 +635,7 @@ public:
                 ID3D12PipelineState* pso = m_Pso;
                 if (b.blendMode == 1u && m_PsoPremul) pso = m_PsoPremul;
                 else if (b.blendMode == 2u && m_PsoAdditive) pso = m_PsoAdditive;
+                else if (b.blendMode == 3u && m_PsoAdditiveAlpha) pso = m_PsoAdditiveAlpha;
                 clist->SetPipelineState(pso);
                 boundBlend = b.blendMode;
             }
@@ -769,12 +914,19 @@ private:
         rtBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
         device->CreateGraphicsPipelineState(&psoDesc, kIID_ID3D12PipelineState, reinterpret_cast<void**>(&m_PsoPremul));
 
-        // Additive-glow PSO (ONE + ONE for premultiplied textures & procedural burning ember shader!)
+        // Additive-glow PSO (ONE + ONE for premultiplied / black-background textures)
         rtBlend.SrcBlend       = D3D12_BLEND_ONE;
         rtBlend.DestBlend      = D3D12_BLEND_ONE;
         rtBlend.SrcBlendAlpha  = D3D12_BLEND_ZERO;
         rtBlend.DestBlendAlpha = D3D12_BLEND_ONE;
         device->CreateGraphicsPipelineState(&psoDesc, kIID_ID3D12PipelineState, reinterpret_cast<void**>(&m_PsoAdditive));
+
+        // Straight-alpha additive PSO (SRC_ALPHA + ONE for PNGs/glyphs with transparent pixels)
+        rtBlend.SrcBlend       = D3D12_BLEND_SRC_ALPHA;
+        rtBlend.DestBlend      = D3D12_BLEND_ONE;
+        rtBlend.SrcBlendAlpha  = D3D12_BLEND_ZERO;
+        rtBlend.DestBlendAlpha = D3D12_BLEND_ONE;
+        device->CreateGraphicsPipelineState(&psoDesc, kIID_ID3D12PipelineState, reinterpret_cast<void**>(&m_PsoAdditiveAlpha));
 
         // 5. Double-buffered Upload Vertex & Index Buffers
         D3D12_HEAP_PROPERTIES upHeap{};
@@ -831,9 +983,10 @@ private:
     UINT                         m_RtvDescriptorSize = 0;
     UINT                         m_SrvDescriptorSize = 0;
     ID3D12RootSignature*         m_RootSig     = nullptr;
-    ID3D12PipelineState*         m_Pso         = nullptr;
-    ID3D12PipelineState*         m_PsoPremul   = nullptr;
-    ID3D12PipelineState*         m_PsoAdditive = nullptr;
+    ID3D12PipelineState*         m_Pso              = nullptr;
+    ID3D12PipelineState*         m_PsoPremul        = nullptr;
+    ID3D12PipelineState*         m_PsoAdditive      = nullptr;
+    ID3D12PipelineState*         m_PsoAdditiveAlpha = nullptr;
     uint8_t                      m_ActiveBlendMode = 0u;
     ID3D12Resource*              m_Vb[2]       = { nullptr, nullptr };
     ID3D12Resource*              m_Ib[2]       = { nullptr, nullptr };
@@ -843,8 +996,11 @@ private:
     uint32_t                     m_CurrentFrameSlot = 0;
     uint32_t                     m_Width       = 0;
     uint32_t                     m_Height      = 0;
+    uint32_t                     m_LastCreatedSlot = 0;
+    uint64_t                     m_FrameNumber     = 0;
 
     UiTextureSlot                m_Textures[kMaxTextures]{};
+    std::vector<UiDeferredRelease> m_DeferredReleases;
     std::vector<UiVertex>        m_Vertices;
     std::vector<uint32_t>        m_Indices;
     std::vector<UiBatch>         m_Batches;

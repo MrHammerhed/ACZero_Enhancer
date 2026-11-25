@@ -24,6 +24,7 @@ namespace acz_ui {
 enum class FontRole : uint8_t {
     Title = 0, // EuroStyle Normal.ttf (headers, tabs, banners)
     Body  = 1, // ACZ_HUD_Font.ttf (menu items, values, descriptions, HUD)
+    Serif = 2, // Classic serif face (Georgia / Times) for Title Screen credits
 };
 
 enum class TextAlign : uint8_t {
@@ -73,6 +74,15 @@ public:
             }
         }
 
+        // Load Serif font (for Title Screen classic typography)
+        if (!LoadFace(m_SerifFace, fontDir + L"serif.ttf")) {
+            if (!LoadFace(m_SerifFace, L"C:\\Windows\\Fonts\\georgia.ttf")) {
+                if (!LoadFace(m_SerifFace, L"C:\\Windows\\Fonts\\times.ttf")) {
+                    LoadFace(m_SerifFace, fontDir + L"EuroStyle Normal.ttf");
+                }
+            }
+        }
+
         // Load Fallback font (for symbols / Cyrillic / extended Unicode)
         if (!LoadFace(m_FallbackFace, fontDir + L"fallback.ttf")) {
             if (!LoadFace(m_FallbackFace, L"C:\\Windows\\Fonts\\ebrima.ttf")) {
@@ -104,17 +114,25 @@ public:
     }
 
     // Measure text width in Virtual 1080p coordinates
-    float MeasureTextWidth(const UiRenderer& renderer, FontRole role, float virtualSize, const char* utf8Text) {
+    float MeasureTextWidth(const UiRenderer& renderer, FontRole role, float virtualSize, const char* utf8Text, float letterSpacing = 0.0f) {
         if (!m_Initialized || !utf8Text || !*utf8Text) return 0.0f;
         const float s = renderer.VirtualScale();
         const int pxHeight = ClampPxHeight(static_cast<int>(std::round(virtualSize * s)));
+        const float trackPx = letterSpacing * s;
 
         float widthPx = 0.0f;
+        int glyphCount = 0;
         const char* p = utf8Text;
         while (*p) {
             uint32_t cp = DecodeUtf8(p);
             const CachedGlyph* g = GetOrRasterizeGlyph(role, pxHeight, cp);
-            if (g) widthPx += g->advance;
+            if (g) {
+                widthPx += g->advance;
+                ++glyphCount;
+            }
+        }
+        if (glyphCount > 1 && trackPx != 0.0f) {
+            widthPx += trackPx * static_cast<float>(glyphCount - 1);
         }
         return (s > 0.001f) ? (widthPx / s) : widthPx;
     }
@@ -128,7 +146,8 @@ public:
         const char* utf8Text,
         Color color,
         TextAlign align = TextAlign::Left,
-        bool dropShadow = true
+        bool dropShadow = true,
+        float letterSpacing = 0.0f
     ) {
         if (!m_Initialized || !utf8Text || !*utf8Text) return;
         if (m_AtlasTexSlot == 0) {
@@ -138,10 +157,11 @@ public:
 
         const float s = renderer.VirtualScale();
         const int pxHeight = ClampPxHeight(static_cast<int>(std::round(virtualSize * s)));
+        const float trackPx = letterSpacing * s;
 
         float startX = vx * s;
         if (align != TextAlign::Left) {
-            float wVirtual = MeasureTextWidth(renderer, role, virtualSize, utf8Text);
+            float wVirtual = MeasureTextWidth(renderer, role, virtualSize, utf8Text, letterSpacing);
             if (align == TextAlign::Center) startX -= (wVirtual * s) * 0.5f;
             else if (align == TextAlign::Right) startX -= (wVirtual * s);
         }
@@ -153,9 +173,9 @@ public:
         if (dropShadow) {
             const float shOff = (std::max)(1.0f, std::round(1.5f * s));
             Color shCol(0, 0, 0, static_cast<uint8_t>((static_cast<int>(color.a) * 190) / 255));
-            DrawGlyphRun(renderer, role, pxHeight, std::floor(startX) + shOff, baselineY + shOff, utf8Text, shCol);
+            DrawGlyphRun(renderer, role, pxHeight, std::floor(startX) + shOff, baselineY + shOff, utf8Text, shCol, trackPx);
         }
-        DrawGlyphRun(renderer, role, pxHeight, std::floor(startX), baselineY, utf8Text, color);
+        DrawGlyphRun(renderer, role, pxHeight, std::floor(startX), baselineY, utf8Text, color, trackPx);
     }
 
 private:
@@ -190,6 +210,7 @@ private:
 
     const LoadedFontFace* PickPrimaryFace(FontRole role) const {
         if (role == FontRole::Title && m_TitleFace.valid) return &m_TitleFace;
+        if (role == FontRole::Serif && m_SerifFace.valid) return &m_SerifFace;
         if (m_BodyFace.valid) return &m_BodyFace;
         if (m_TitleFace.valid) return &m_TitleFace;
         if (m_FallbackFace.valid) return &m_FallbackFace;
@@ -327,7 +348,8 @@ private:
         float penX,
         float baselineY,
         const char* utf8Text,
-        Color color
+        Color color,
+        float trackPx = 0.0f
     ) {
         const char* p = utf8Text;
         while (*p) {
@@ -344,13 +366,14 @@ private:
                     m_AtlasTexSlot
                 );
             }
-            penX += g->advance;
+            penX += g->advance + trackPx;
         }
     }
 
     bool             m_Initialized = false;
     LoadedFontFace   m_TitleFace;
     LoadedFontFace   m_BodyFace;
+    LoadedFontFace   m_SerifFace;
     LoadedFontFace   m_FallbackFace;
 
     std::vector<uint8_t> m_AtlasPixels;

@@ -50,23 +50,9 @@ body {
     z-index: 2;
 }
 
-@keyframes acz-scan-sweep {
-    0%   { top: 108%; opacity: 0.0; }
-    2%   { opacity: 1.0; }
-    17%  { top: -16%; opacity: 0.92; }
-    19%  { top: -20%; opacity: 0.0; }
-    100% { top: -20%; opacity: 0.0; }
-}
-
+/* Scanline is rendered natively with exact MainSelect.swa MC[265] additive blend & 3.0s timing in C++ */
 #bg-scanline {
-    position: absolute;
-    left: 0;
-    width: 100%;
-    height: 135px;
-    decorator: vertical-gradient(rgba(255, 224, 170, 108) rgba(255, 110, 50, 0));
-    border-top: 2px rgba(255, 245, 215, 200);
-    z-index: 3;
-    animation: 9.0s linear infinite acz-scan-sweep;
+    display: none;
 }
 
 #bg-sparks {
@@ -78,21 +64,81 @@ body {
     z-index: 4;
 }
 
-/* Top-left key/button prompt strip (OK | CANCEL | L1/R1) */
+/* Top-left key/button prompt strip (OK | CANCEL) */
+@keyframes acz-prompts-intro {
+    0%   { opacity: 0.0; }
+    45%  { opacity: 0.0; }
+    100% { opacity: 1.0; }
+}
+
 #top-prompts {
     position: absolute;
     z-index: 10;
-    top: 4.8%;
+    top: 5.5%;
     left: 4.8%;
     right: 4.8%;
-    height: 44px;
+    height: 48px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    font-family: "ACZTitle";
-    font-size: 25px;
-    letter-spacing: 2px;
+    font-family: "ACZBody";
+    font-size: 38px;
+    letter-spacing: 9px;
     color: #F7C730;
+    animation: 0.45s quadratic-out acz-prompts-intro;
+    font-weight: bold;
+    font-effect: glow(3px rgba(208, 168, 26, 210));
+}
+
+.btn-icon {
+    height: 42px;
+    width: auto;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+.folder-icon {
+    height: 28px;
+    width: 33px;
+    margin: 0 12px 7px -10px;
+    vertical-align: middle;
+    opacity: 1.0;
+}
+
+.folder-icon.hidden {
+    opacity: 0.0;
+}
+
+.sq-slot {
+    display: inline-block;
+    width: 13px;
+    height: 21px;
+    margin-right: 4px;
+    margin-bottom: 4px;
+    vertical-align: middle;
+    opacity: 1.0;
+    transition: opacity 0.14s quadratic-out;
+}
+
+.badge-row .sq-slot {
+    margin-top: 2px;
+}
+
+@keyframes acz-sq-blink {
+    0%   { opacity: 1.00; }
+    50%  { opacity: 0.35; }
+    100% { opacity: 1.00; }
+}
+
+.sq-icon {
+    width: 14px;
+    height: 21px;
+    vertical-align: middle;
+    animation: 1.05s linear infinite acz-sq-blink;
+}
+
+.sq-icon.off {
+    visibility: hidden;
 }
 
 .prompt-cap {
@@ -106,8 +152,12 @@ body {
 }
 
 .prompt-sep {
-    margin: 0 18px;
-    color: rgba(242, 188, 36, 140);
+    display: block;
+    width: 4px;
+    height: 38px;
+    margin: 0 20px;
+    background-color: rgba(242, 188, 36, 185);
+    font-effect: glow(3px rgba(208, 168, 26, 210));
 }
 
 .prompt-right {
@@ -116,33 +166,40 @@ body {
     color: rgba(247, 199, 48, 190);
 }
 
-/* Main tactical folder frame */
+/* Main tactical folder frame (MC 263 F0..F18: 0.30s center unfold) */
+@keyframes acz-frame-intro {
+    0%   { transform: scale(0.06, 0.06); opacity: 0.0; }
+    100% { transform: scale(1.0, 1.0);   opacity: 1.0; }
+}
+
 #menu-frame {
     position: absolute;
     z-index: 10;
-    top: 12.2%;
+    top: 12.6%;
     left: 4.8%;
     right: 4.8%;
-    bottom: 20.5%;
+    bottom: 22.8%;
     display: flex;
     flex-direction: column;
-    border: 1px rgba(210, 152, 22, 175);
+    border: 6px rgba(255, 216, 0, 48);
+    border-top: 0px;
     background-color: transparent;
+    animation: 0.32s quadratic-out acz-frame-intro;
 }
 
 /* Folder breadcrumb header bar: MAIN MENU > OPTIONS > ... */
 #breadcrumb-bar {
     height: 40px;
-    padding: 0 16px;
+    padding: 6px 0 0 12px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    background-color: rgba(162, 114, 12, 118);
-    border-bottom: 1px rgba(215, 158, 24, 190);
+    background-color: rgba(255, 216, 0, 48);
     font-family: "ACZBody";
-    font-size: 17px;
-    letter-spacing: 3px;
+    font-size: 20px;
+    letter-spacing: 9px;
     color: #FAD03C;
+    font-effect: glow(2px rgba(208, 168, 26, 210));
 }
 
 .folder-tag {
@@ -168,116 +225,404 @@ body {
     flex-direction: row;
     width: 100%;
     overflow: hidden;
+    position: relative;
 }
 
 .col-left {
-    width: 48%;
+    position: relative;
+    width: 41.5%;
     height: 100%;
-    border-right: 1px rgba(195, 140, 20, 140);
-    padding: 10px 0;
+    border-right: 6px rgba(255, 216, 0, 48);
+    padding: 0;
     overflow: hidden;
 }
 
 .col-mid {
-    width: 28%;
+    position: relative;
+    width: 29%;
     height: 100%;
-    border-right: 1px rgba(195, 140, 20, 110);
-    padding: 10px 0;
+    border-right: 6px rgba(255, 216, 0, 48);
+    padding: 6px 0;
     overflow: hidden;
 }
 
 .col-right {
-    width: 24%;
+    position: relative;
+    flex: 1;
     height: 100%;
-    padding: 10px 18px;
+    padding: 6px 18px;
     overflow: hidden;
 }
 
-/* Category & Option rows */
-@keyframes acz-pulse {
-    0%   { background-color: #F7C400; }
-    50%  { background-color: #FFD93D; }
-    100% { background-color: #F7C400; }
+#col-left-items,
+#col-mid-items {
+    display: block;
+    width: 100%;
+    position: relative;
+    left: 0px;
+}
+
+/* Dynamic per-screen column proportions matched 1:1 to vanilla ACZ (00:00 MAIN MENU, 00:02 OPTIONS, 00:04 DISPLAY, 00:07 SCREEN) */
+#columns.lay-campaign .col-left { width: 42%; }
+#columns.lay-campaign .col-mid  { width: 28%; }
+
+#columns.lay-options .col-left  { width: 52%; }
+#columns.lay-options .col-mid   { width: 22%; }
+
+/* 2-column mode for leaf-parent submenus (DISPLAY SETTINGS, SCREEN SETTINGS, DIFFICULTY) & leaf choices (SCREEN RATIO) */
+#columns.two-col .col-left {
+    width: 52%;
+}
+#columns.two-col .col-mid {
+    flex: 1;
+    width: auto;
+    border-right: 0;
+    padding: 6px 0;
+}
+#columns.two-col .col-right {
+    display: none;
+}
+#columns.two-col-leaf .col-mid {
+    padding: 0;
+}
+
+.col-scroll {
+    position: relative;
+    width: 33px;
+    height: 100%;
+    border-left: 6px rgba(255, 216, 0, 48);
+    padding: 2px;
+}
+
+/* Hide entire scrollbar track + border on screens without scrolling (OPTIONS, DISPLAY, SCREEN, etc.) */
+#columns.no-scroll .col-scroll {
+    display: none;
+}
+
+.scroll-thumb {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    top: 0%;
+    margin-top: 2px;
+    height: 41.3%;
+    background-color: rgba(255, 216, 0, 48);
+    opacity: 1.0;
+    transition: opacity 0.16s quadratic-out;
+}
+
+/* Smoothly gliding yellow highlight cursor bar (interpolated per-frame in C++ at 60/120+ FPS!) */
+#cursor-bar,
+#cursor-bar-mid {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 65px;
+    background-color: #F5C400;
+    z-index: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 16px;
+    transition: opacity 0.10s quadratic-out;
+}
+
+#cursor-bar-mid {
+    opacity: 0.0;
+}
+
+#cursor-arrow {
+    color: #4A1404;
+    font-family: "ACZBody";
+    font-size: 22px;
+}
+
+/* Solid filled yellow block cells covering characters before they appear (no inverted letter shown inside!) */
+.tt-ch {
+    display: inline-block;
+    text-align: center;
+    background-color: #F5C400;
+    color: rgba(0, 0, 0, 0);
+    letter-spacing: 0px;
+    padding: 0;
+    margin-right: 3px;
+}
+
+.tt-ch-dim {
+    display: inline-block;
+    text-align: center;
+    background-color: rgba(245, 196, 0, 170);
+    color: rgba(0, 0, 0, 0);
+    letter-spacing: 0px;
+    padding: 0;
+    margin-right: 3px;
+}
+
+.cat-row .tt-ch,
+.cat-row .tt-ch-dim {
+    min-width: 21px;
+    margin-right: 4px;
+}
+
+#footer-desc .tt-ch,
+#footer-desc .tt-ch-dim {
+    min-width: 17px;
+    margin-right: 3px;
+}
+
+#breadcrumb-bar .tt-ch,
+#breadcrumb-bar .tt-ch-dim {
+    min-width: 12px;
+    margin-right: 3px;
+}
+
+/* Leading 3 empty fixed-width yellow blocks for Col 2 & Col 3 teletype (NEW [][][], CON[][][], QUI[][][]) */
+.tt-lead-1 {
+    display: inline-block;
+    width: 9px;
+    height: 17px;
+    margin-right: 3px;
+    background-color: rgba(245, 196, 0, 145);
+    vertical-align: middle;
+}
+
+.tt-lead-2 {
+    display: inline-block;
+    width: 9px;
+    height: 17px;
+    margin-right: 3px;
+    background-color: rgba(245, 196, 0, 205);
+    vertical-align: middle;
+}
+
+.tt-lead-3 {
+    display: inline-block;
+    width: 9px;
+    height: 17px;
+    margin-right: 3px;
+    background-color: #F5C400;
+    vertical-align: middle;
+}
+
+/* Blinking yellow/amber fly-in squares (downward transition: appear at right edge -> blink -> fly left -> type) */
+@keyframes acz-fly-blink {
+    0%   { opacity: 1.0; }
+    50%  { opacity: 0.25; }
+    100% { opacity: 1.0; }
+}
+
+.fly-sq-lg {
+    display: inline-block;
+    width: 12px;
+    height: 26px;
+    background-color: #F5B418;
+    vertical-align: middle;
+    animation: 0.11s linear infinite acz-fly-blink;
+}
+
+.fly-sq-sm {
+    display: inline-block;
+    width: 10px;
+    height: 18px;
+    background-color: #F5B418;
+    vertical-align: middle;
+    animation: 0.11s linear infinite acz-fly-blink;
+}
+
+.badge-wipe {
+    display: none;
+    width: 10px;
+    height: 18px;
+    background-color: #F5B418;
+    vertical-align: middle;
+    animation: 0.11s linear infinite acz-fly-blink;
+}
+
+/* Transition states on #columns */
+#columns.trans-fly .col-right {
+    opacity: 0.0;
+}
+
+#columns.trans-fly .preview-group,
+#columns.trans-fly .preview-group.dim {
+    opacity: 1.0;
+    transition: none;
+}
+
+#columns.trans-fly .submenu-badge-icon,
+#columns.trans-fly .submenu-badge-col3,
+#columns.trans-fly .sq-slot {
+    display: none;
+}
+
+#columns.trans-fly .badge-wipe {
+    display: inline-block;
+}
+
+/* Upward transition clean blank frame (00:02: all 3 columns blank, no fly squares) */
+#columns.trans-clear #col-left-items,
+#columns.trans-clear #col-mid-items,
+#columns.trans-clear .col-right {
+    opacity: 0.0;
+}
+
+/* Keep blinking sq-icons hidden via wrapper .sq-slot until Col 2 finishes typing (never touch .sq-icon animation!) */
+#columns.trans-clear .sq-slot,
+#columns.trans-type-mid .sq-slot {
+    opacity: 0.0;
 }
 
 .cat-row {
-    height: 58px;
+    position: relative;
+    z-index: 2;
+    height: 69px;
     padding: 0 22px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    font-family: "ACZTitle";
-    font-size: 27px;
-    letter-spacing: 3px;
-    color: #FFD630;
-    transition: background-color 0.12s quadratic-out, color 0.12s quadratic-out;
+    font-family: "ACZBody";
+    font-size: 38px;
+    letter-spacing: 9px;
+    color: #CEA91B;
+    font-weight: bold;
+    font-effect: glow(3px rgba(208, 168, 26, 210));
 }
 
 .cat-row.selected {
-    background-color: #F7C400;
-    color: #2B1700;
-    animation: 1.6s infinite acz-pulse;
+    color: rgb(138, 51, 1);
+    font-effect: glow(3px rgba(138, 51, 1, 128));
 }
 
 .cat-row.dimmed {
-    color: rgba(234, 180, 28, 125);
+    color: rgba(137, 90, 20, 196);
+    font-effect: glow(3px rgba(137, 90, 20, 128));
 }
 
 .cat-row.active-parent {
-    background-color: rgba(247, 196, 0, 75);
-    color: #FFE47A;
+    color: #FFD630;
+}
+
+/* Preview groups in Col 2 & Col 3: tight rows within a group, generous gap between groups (1:1 to vanilla screenshot) */
+.preview-group {
+    display: block;
+    margin-bottom: 36px;
+    opacity: 1.0;
+    transition: opacity 0.16s quadratic-out;
+}
+
+.preview-group.dim {
+    opacity: 0.34;
+}
+
+.opt-row.badge-row {
+    height: 34px;
+    padding: 0 12px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-row.badge-row-col3 {
+    height: 34px;
+    padding: 0 12px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-row.sub-gap {
+    margin-top: 34px;
+}
+
+.opt-row.micro-gap {
+    margin-top: 4px;
+}
+
+.opt-row.badge-gap {
+    margin-top: 34px;
+}
+
+.submenu-badge-icon {
+    display: block;
+    height: 28px;
+    width: 28px;
+}
+
+.submenu-badge-col3 {
+    display: block;
+    height: 27px;
+    width: 27px;
+}
+
+#col-right-scroll {
+    display: block;
+    width: 100%;
+    position: relative;
+    top: 0px;
 }
 
 /* Sub-option rows (when inside a category or previewed in col 2) */
 .opt-row {
-    height: 46px;
-    padding: 0 18px;
+    position: relative;
+    z-index: 2;
+    height: 60px;
+    padding: 0 20px;
     display: flex;
     flex-direction: row;
     align-items: center;
     font-family: "ACZBody";
-    font-size: 20px;
-    letter-spacing: 1.5px;
+    font-size: 28px;
+    letter-spacing: 9px;
     color: #E8B420;
+    transition: color 0.16s quadratic-out;
+    font-effect: glow(2px rgba(208, 168, 26, 210));
 }
 
 .opt-row.preview {
-    height: 36px;
-    font-size: 16px;
-    color: rgba(232, 180, 32, 175);
+    height: 33px;
+    padding: 0 10px;
+    font-size: 18px;
+    letter-spacing: 7px;
+    color: rgba(242, 192, 36, 225);
 }
 
 .opt-row.selected {
-    background-color: #F7C400;
-    color: #261400;
-    animation: 1.6s infinite acz-pulse;
+    color: #4A1404;
+}
+
+.opt-row.dimmed {
+    color: rgba(232, 180, 32, 85);
 }
 
 .opt-val {
     margin-left: auto;
     font-family: "ACZBody";
-    font-size: 19px;
-    letter-spacing: 1px;
+    font-size: 20px;
+    letter-spacing: 2px;
 }
 
 .opt-row.selected .opt-val {
-    color: #261400;
+    color: #4A1404;
 }
 
-/* Right / middle column value preview / detail card */
+/* Right / middle column value choices (in 2-column leaf selection mode) */
 .val-choice {
-    height: 38px;
-    padding: 0 20px;
+    position: relative;
+    z-index: 2;
+    height: 68px;
+    padding: 0 24px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    font-size: 19px;
-    letter-spacing: 1.5px;
-    color: rgba(232, 180, 32, 145);
+    font-family: "ACZBody";
+    font-size: 34px;
+    letter-spacing: 4px;
+    color: rgba(242, 192, 36, 195);
 }
 
 .val-choice.active {
-    color: #FFE878;
+    color: #4A1404;
 }
 
 .badge {
@@ -327,15 +672,650 @@ body {
     background-color: #F7C400;
 }
 
-/* Bottom description line (matching ACZ's "Adjust sound settings.") */
+/* Bottom description text directly over the crimson background (no dark band/border in vanilla ACZ!) */
 #footer-desc {
     position: absolute;
     z-index: 10;
-    left: 5.0%;
-    right: 5.0%;
-    bottom: 13.5%;
+    left: 0;
+    right: 0;
+    top: 78%;
+    bottom: 0;
+    padding: 12px 5.2% 0 5.2%;
+    border-top: 0;
+    background-color: transparent;
+    font-family: "EuroStyle";
+    font-size: 30px;
+    letter-spacing: 3.8px;
+    color: #F5C428;
+}
+
+/* ============================================================================
+ * saveload.rcss - Save / Load Screen Layout Extensions
+ * Inherits core palette, typography, #top-prompts, #menu-frame,
+ * #breadcrumb-bar, and #footer-desc directly from acz_theme.rcss.
+ * ============================================================================ */
+
+#sl-mode-tag {
+    margin-left: auto;
+    margin-right: 18px;
+    font-family: "ACZBody";
+    font-size: 20px;
+    letter-spacing: 6px;
+    color: #FAD03C;
+    font-effect: glow(2px rgba(208, 168, 26, 210));
+}
+
+#sl-slots {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    overflow: hidden;
+}
+
+.sl-slot {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    border-bottom: 4px rgba(255, 216, 0, 48);
+    background-color: transparent;
+}
+
+.sl-slot.last-slot {
+    border-bottom: 0px;
+}
+
+.sl-slot.selected {
+    background-color: transparent;
+    border-top: 3px #F7C400;
+    border-bottom: 3px #F7C400;
+    border-left: 3px #F7C400;
+    border-right: 3px #F7C400;
+}
+
+.sl-slot-bar {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    height: 44px;
+    border-bottom: 2px rgba(255, 216, 0, 44);
+}
+
+.sl-slot.selected .sl-slot-bar {
+    border-bottom: 2px #F7C400;
+}
+
+.sl-slot-title {
+    display: block;
+    width: 100%;
+    height: 42px;
+    line-height: 42px;
+    text-align: center;
+    font-family: "ACZBody";
+    font-size: 26px;
+    letter-spacing: 6px;
+    color: rgba(242, 192, 36, 155);
+    background-color: transparent;
+}
+
+.sl-slot.selected .sl-slot-title {
+    background-color: #F7C400;
+    color: #4A1404;
+    font-weight: bold;
+    font-effect: none;
+}
+
+.sl-slot-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    padding: 8px 34px 10px 34px;
+}
+
+.sl-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 42px;
+    font-family: "ACZBody";
+    font-size: 25px;
+    letter-spacing: 4px;
+    color: rgba(232, 180, 32, 140);
+}
+
+.sl-slot.selected .sl-row {
+    color: #F7C730;
+    font-effect: glow(2px rgba(208, 168, 26, 190));
+}
+
+.sl-key {
+    display: block;
+    width: 470px;
+}
+
+.sl-val {
+    display: block;
+    color: rgba(242, 198, 60, 155);
+}
+
+.sl-slot.selected .sl-val {
+    color: #FFE46E;
+}
+
+.sl-clear-badge {
+    position: absolute;
+    right: 34px;
+    bottom: 16px;
+    width: 164px;
+    height: 38px;
+    line-height: 38px;
+    text-align: center;
+    border: 2px rgba(242, 192, 36, 110);
+    color: rgba(242, 192, 36, 145);
+    font-family: "ACZBody";
+    font-size: 22px;
+    letter-spacing: 5px;
+    background-color: transparent;
+}
+
+.sl-slot.selected .sl-clear-badge {
+    border: 2px #F7C400;
+    color: #FFE46E;
+    background-color: transparent;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.sl-clear-badge.hidden {
+    display: none;
+}
+
+/* Authentic ACZ Modal Confirm / Status Dialog (matches vanilla Cancel save? / Cancel load? layout) */
+#sl-modal-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 105);
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#sl-modal-overlay.hidden {
+    display: none;
+}
+
+#sl-modal-box {
+    position: relative;
+    width: 1320px;
+    height: 350px;
+    background-color: rgba(22, 4, 2, 145);
+    border: 3px #D8A824;
+    display: flex;
+    flex-direction: column;
+}
+
+#sl-modal-header {
+    height: 58px;
+    padding: 0 24px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    border-bottom: 2px #D8A824;
+}
+
+#sl-modal-msg {
+    font-family: "EuroStyle";
+    font-size: 32px;
+    letter-spacing: 3px;
+    color: #FFE46E;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+#sl-modal-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 36px;
+}
+
+#sl-modal-sub {
+    margin-bottom: 22px;
+    font-family: "ACZBody";
+    font-size: 20px;
+    letter-spacing: 2px;
+    color: rgba(245, 196, 40, 205);
+    text-align: center;
+}
+
+#sl-modal-sub.hidden {
+    display: none;
+}
+
+#sl-modal-btns {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+#sl-modal-btns.hidden {
+    display: none;
+}
+
+.sl-modal-btn {
+    display: block;
+    width: 230px;
+    height: 54px;
+    line-height: 54px;
+    margin: 7px 0;
+    text-align: center;
+    border: 2px rgba(216, 168, 36, 175);
+    color: #F7C730;
+    font-family: "ACZBody";
+    font-size: 30px;
+    letter-spacing: 6px;
+    background-color: transparent;
+}
+
+.sl-modal-btn.focused {
+    background-color: #F7C400;
+    border: 2px #FFE878;
+    color: #4A1404;
+    font-weight: bold;
+    font-effect: none;
+}
+
+.sl-modal-btn.hidden {
+    display: none;
+}
+
+/* ============================================================================
+ * options_sub - Controller, Language, Sound, Brightness & Screen Position
+ * ============================================================================ */
+
+#menu-frame.hidden,
+#opt-sep-def.hidden,
+#opt-ico-def.hidden,
+#opt-lbl-def.hidden {
+    display: none;
+}
+
+#opt-body {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+/* --- Split 2-column layout (Controller Settings & Language Settings) --- */
+.opt-split-left {
+    width: 76.5%;
+    height: 100%;
+    border-right: 6px rgba(255, 216, 0, 48);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+}
+
+.opt-split-right {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 6px 14px;
+    overflow: hidden;
+}
+
+.opt-left-row {
+    height: 69px;
+    padding: 0 22px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    font-family: "ACZBody";
+    font-size: 38px;
+    letter-spacing: 9px;
+    color: #CEA91B;
+    font-weight: bold;
+    font-effect: glow(3px rgba(208, 168, 26, 210));
+}
+
+.opt-left-row span {
+    font-family: "ACZBody";
+    font-size: 38px;
+    letter-spacing: 9px;
+    font-weight: bold;
+    color: #CEA91B;
+    font-effect: glow(3px rgba(208, 168, 26, 210));
+}
+
+.opt-left-row.selected {
+    background-color: #F5C400;
+}
+
+.opt-left-row.selected span {
+    color: rgb(138, 51, 1);
+    font-effect: glow(3px rgba(138, 51, 1, 128));
+}
+
+.opt-left-row.editing {
+    background-color: rgba(245, 196, 0, 175);
+}
+
+.opt-left-row.editing span {
+    color: rgb(138, 51, 1);
+    font-effect: glow(3px rgba(138, 51, 1, 128));
+}
+
+.opt-right-group {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 11px;
+}
+
+.opt-right-choice {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 29px;
+    padding: 0 8px;
+    font-family: "ACZBody";
+    font-size: 18px;
+    letter-spacing: 7px;
+    color: rgba(242, 192, 36, 155);
+}
+
+.opt-right-choice span {
+    font-family: "ACZBody";
+    font-size: 18px;
+    letter-spacing: 7px;
+    color: rgba(242, 192, 36, 155);
+    font-effect: glow(2px rgba(208, 168, 26, 120));
+}
+
+.opt-right-group.active .opt-right-choice span {
+    color: rgba(242, 192, 36, 235);
+    font-effect: glow(2px rgba(208, 168, 26, 210));
+}
+
+.opt-right-choice.focused {
+    background-color: #F5C400;
+}
+
+.opt-right-choice.focused span {
+    color: rgb(138, 51, 1);
+    font-weight: bold;
+    font-effect: glow(2px rgba(138, 51, 1, 128));
+}
+
+.opt-sq {
+    display: inline-block;
+    width: 11px;
+    height: 19px;
+    margin-right: 6px;
+    background-color: rgba(245, 196, 0, 0);
+}
+
+.opt-right-group.active .opt-sq {
+    background-color: #F5C400;
+    animation: 1.05s linear infinite acz-sq-blink;
+}
+
+.opt-right-choice.focused .opt-sq {
+    background-color: rgb(138, 51, 1);
+    animation: none;
+}
+
+.opt-caret {
+    display: inline-block;
+    width: 20px;
+    text-align: center;
+    color: rgba(242, 192, 36, 155);
+}
+
+.opt-right-group.active .opt-caret {
+    color: #FFE46E;
+}
+
+.opt-right-choice.focused .opt-caret {
+    color: rgb(138, 51, 1);
+}
+
+/* --- Sound Settings layout --- */
+.opt-sound-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 24px 210px 32px 210px;
+}
+
+.opt-sound-section {
+    display: flex;
+    flex-direction: column;
+}
+
+.opt-sound-label {
     font-family: "ACZBody";
     font-size: 24px;
-    letter-spacing: 1.5px;
-    color: #F5C428;
+    letter-spacing: 6px;
+    color: rgba(232, 180, 32, 150);
+    margin-bottom: 10px;
+}
+
+.opt-sound-section.focused .opt-sound-label {
+    color: #F7C730;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.opt-mode-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-mode-btn {
+    flex: 1;
+    height: 46px;
+    line-height: 44px;
+    text-align: center;
+    border: 2px rgba(242, 192, 36, 130);
+    color: rgba(242, 192, 36, 175);
+    font-family: "ACZBody";
+    font-size: 26px;
+    letter-spacing: 6px;
+    background-color: transparent;
+}
+
+.opt-sound-section.focused .opt-mode-btn {
+    border: 2px rgba(247, 199, 48, 210);
+    color: #F7C730;
+}
+
+.opt-mode-btn.selected {
+    background-color: rgba(245, 196, 0, 125);
+    color: #4A1404;
+    font-weight: bold;
+}
+
+.opt-sound-section.focused .opt-mode-btn.selected {
+    background-color: #F5C400;
+    border: 2px #FFE878;
+    color: #4A1404;
+    font-weight: bold;
+}
+
+.opt-arrow-gap {
+    display: inline-block;
+    width: 24px;
+    text-align: center;
+    font-family: "ACZBody";
+    font-size: 22px;
+    color: rgba(245, 196, 0, 0);
+}
+
+.opt-arrow-gap.visible {
+    color: #FFE46E;
+}
+
+.opt-vol-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-vol-num {
+    width: 155px;
+    font-family: "ACZBody";
+    font-size: 26px;
+    letter-spacing: 4px;
+    color: rgba(232, 180, 32, 150);
+}
+
+.opt-sound-section.focused .opt-vol-num {
+    color: #FFE46E;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.opt-cells {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-cell {
+    width: 34px;
+    height: 34px;
+    line-height: 30px;
+    margin-right: 18px;
+    text-align: center;
+    border: 2px rgba(232, 180, 32, 120);
+    color: rgba(232, 180, 32, 150);
+    font-family: "ACZBody";
+    font-size: 22px;
+    background-color: transparent;
+}
+
+.opt-sound-section.focused .opt-cell {
+    border: 2px rgba(247, 199, 48, 220);
+    color: #F7C730;
+}
+
+.opt-sound-section.focused .opt-cell.filled {
+    border: 2px #FFE46E;
+    color: #FFE46E;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.opt-sound-section.focused .opt-cell.active-tip {
+    background-color: #F5C400;
+    border: 2px #FFE878;
+    color: #4A1404;
+    font-weight: bold;
+    font-effect: none;
+}
+
+/* --- Brightness Settings layout --- */
+.opt-bright-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 140px 26px 140px;
+}
+
+.opt-bright-top {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.opt-bright-title {
+    width: 440px;
+    font-family: "ACZBody";
+    font-size: 26px;
+    letter-spacing: 6px;
+    color: #F7C730;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.opt-bright-ctrl {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.opt-bright-val {
+    font-family: "ACZBody";
+    font-size: 28px;
+    letter-spacing: 4px;
+    color: #FFE46E;
+    margin-bottom: 8px;
+    font-effect: glow(2px rgba(208, 168, 26, 200));
+}
+
+.opt-bright-cells {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.opt-bcell {
+    width: 36px;
+    height: 36px;
+    line-height: 32px;
+    margin: 0 7px;
+    text-align: center;
+    border: 2px rgba(247, 199, 48, 210);
+    color: #F7C730;
+    font-family: "ACZBody";
+    font-size: 23px;
+}
+
+.opt-bcell.active {
+    background-color: #F5C400;
+    border: 2px #FFE878;
+    color: #4A1404;
+    font-weight: bold;
+}
+
+.opt-barrow {
+    display: inline-block;
+    width: 14px;
+    text-align: center;
+    font-family: "ACZBody";
+    font-size: 20px;
+    color: #FFE46E;
+}
+
+.opt-bright-box {
+    flex: 1;
+    background-color: #000000;
+    padding: 46px 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.opt-swatch-row {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.opt-swatch {
+    width: 78px;
+    height: 78px;
 }

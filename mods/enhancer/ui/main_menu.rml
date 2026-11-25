@@ -4,33 +4,38 @@
     <link type="text/rcss" href="acz_theme.rcss" />
 </head>
 <body>
-    <div id="bg-grid"></div>
     <div id="bg-scanline"></div>
     <div id="bg-sparks" data-count="34" data-speed="1.0" data-color="#ff5a18"></div>
 
     <div id="top-prompts">
-        <span class="prompt-cap" id="cap-ok">ENTER</span><span>OK</span>
-        <span class="prompt-sep">|</span>
-        <span class="prompt-cap" id="cap-cancel">ESC</span><span>CANCEL</span>
-        <span class="prompt-sep">|</span>
-        <span class="prompt-cap" id="cap-change">LT/RT</span><span>CHANGE</span>
+        <img class="btn-icon" id="ico-ok" src="assets/icons/ps/PS5_Cross.png" /><span>OK</span>
+        <span class="prompt-sep"></span>
+        <img class="btn-icon" id="ico-cancel" src="assets/icons/ps/PS5_Circle.png" /><span>CANCEL</span>
         <span class="prompt-right" id="version-tag">[F1: VANILLA / CUSTOM]  [F5: HOT-RELOAD]</span>
     </div>
 
     <div id="menu-frame">
         <div id="breadcrumb-bar">
-            <span class="folder-tag">DIR</span>
+            <img class="folder-icon" id="folder-icon" src="assets/icons/ui/folder.png" />
             <span id="breadcrumb-text">MAIN MENU</span>
             <span id="toast-msg"></span>
         </div>
 
         <div id="columns">
-            <div class="col-left"  id="col-left"></div>
-            <div class="col-mid"   id="col-mid"></div>
+            <div class="col-left"  id="col-left">
+                <div id="cursor-bar"><span id="cursor-arrow">&gt;</span></div>
+                <div id="col-left-items"></div>
+            </div>
+            <div class="col-mid"   id="col-mid">
+                <div id="cursor-bar-mid"></div>
+                <div id="col-mid-items"></div>
+            </div>
             <div class="col-right" id="col-right"></div>
+            <div class="col-scroll"><div class="scroll-thumb" id="scroll-thumb"></div></div>
         </div>
     </div>
 
     <div id="footer-desc">Play through the game following a storyline.</div>
+    <div id="display-confirm-overlay" style="display: none;"></div>
 </body>
 </rml>

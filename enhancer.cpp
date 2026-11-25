@@ -34,11 +34,17 @@
 
 #include "acz_radial_fog_shaders.h"
 #include "acz_draw_distance.h"
+#include "acz_display_engine.h"
 #include "ui/acz_ui_renderer.h"
 #include "ui/acz_ui_font.h"
 #include "ui/acz_ui_widgets.h"
 #include "ui/screen_options.h"
 #include "ui/acz_rmlui_backend.h"
+#include "ui/screen_wakelogo.h"
+#include "ui/screen_memcheck.h"
+#include "ui/screen_saveload.h"
+#include "ui/screen_options_sub.h"
+#include "ui/screen_title.h"
 #pragma comment(lib, "third_party/RmlUi/build_x64/Release/rmlui.lib")
 
 namespace fs = std::filesystem;
@@ -139,6 +145,7 @@ static int                   g_ScreenAspect                 = 1;     // 0 = 4:3,
 static bool                  g_DrawDistance                 = false; // 0 = Disabled (vanilla, default), 1 = Unified 2x DrawDistance + OOB Terrain
 static bool                  g_RadialFog                    = true;  // 1 = Spherical radial fog (default; active in both vanilla and DrawDistance modes), 0 = Vanilla planar Z fog
 static bool                  g_EnableCustomUI               = true;  // 1 = Native-res D3D12 UI Engine (replaces legacy SWG Options + adds Enhancer tab; F1 hotkey)
+static int                   g_UiWidescreenOverride         = 0;     // 0 = Auto, 1 = Force 4:3 menu width, 2 = Force 16:9 menu width
 
 static std::atomic<uint16_t> g_LiveInputButtons{0};
 static std::atomic<int>      g_SuppressInputFramesAfterLogoSkip{0};
@@ -159,6 +166,7 @@ static void SaveAllEnhancerSettingsToIni() {
     WritePrivateProfileStringA("Enhancer",     "MenuAspectMode",        std::to_string(g_MenuAspectMode).c_str(), ini_str.c_str());
     WritePrivateProfileStringA("Enhancer",     "Unlock2PlayerCampaign", g_Unlock2PlayerCampaign ? "1" : "0", ini_str.c_str());
     WritePrivateProfileStringA("UI",           "EnableCustomUI",        g_EnableCustomUI ? "1" : "0", ini_str.c_str());
+    WritePrivateProfileStringA("UI",           "WidescreenOverride",    std::to_string(g_UiWidescreenOverride).c_str(), ini_str.c_str());
     WritePrivateProfileStringA("DrawDistance", "DrawDistance",          g_DrawDistance ? "1" : "0", ini_str.c_str());
     WritePrivateProfileStringA("DrawDistance", "RadialFog",             g_RadialFog ? "1" : "0", ini_str.c_str());
     WritePrivateProfileStringA("Widescreen",   "ScreenAspect",          std::to_string(g_ScreenAspect).c_str(), ini_str.c_str());
@@ -455,6 +463,8 @@ static void LoadEnhancerConfigIni() {
         g_ScreenAspect = GetPrivateProfileIntA("Enhancer", "ScreenAspect", 1, ini_str.c_str());
         if (g_ScreenAspect < 0 || g_ScreenAspect > 2) g_ScreenAspect = 1;
     }
+    acz_display::g_AspectOverride = acz_display::kAspectAuto;
+    g_UiWidescreenOverride  = std::clamp(static_cast<int>(GetPrivateProfileIntA("UI", "WidescreenOverride", 0, ini_str.c_str())), 0, 2);
     g_MenuAspectMode        = ReadEnhancerIniInt("MenuAspectMode",      default_menu_mode);
 }
 
@@ -768,7 +778,19 @@ static int QueryHdTexGimAspectTier(uint8_t* gim_desc, const char* caller_tag) {
     return 0; // Standalone fallback: 4:3 native GIM texture
 }
 
+static float GetEffectiveAspectRatio() {
+    if (acz_display::g_Installed) {
+        return acz_display::GetEffectiveAspectRatio();
+    }
+    if (g_ScreenAspect == 0) return 4.0f / 3.0f;
+    if (g_ScreenAspect == 2) return 21.0f / 9.0f;
+    return 16.0f / 9.0f;
+}
+
 static int GetGameAspectOption() {
+    if (acz_display::g_Installed) {
+        return acz_display::GetAspectTier012();
+    }
     return (g_ScreenAspect >= 0 && g_ScreenAspect <= 2) ? g_ScreenAspect : 1;
 }
 
@@ -1013,6 +1035,8 @@ static void BuildSwgAspectDiffTable(
 //   - When a custom widescreen menu (_16x9.swa / _21x9.swa, authored on a 682-wide canvas)
 //     is active (ws_menu_active == true), [RVA_GsVirtualWidth] is kept at 682 so its
 //     -85..597 canvas fills 0..1920 (100% of the display).
+static thread_local bool  g_InsideDebriefingDrawForAspect = false;
+
 static void UpdateDynamicPillarboxAndAspect(bool ws_menu_active) {
     if (!g_ExeBase) return;
     __try {
@@ -1022,51 +1046,52 @@ static void UpdateDynamicPillarboxAndAspect(bool ws_menu_active) {
         float*    pAssaultModelCenter = reinterpret_cast<float*>(g_ExeBase + AczRva(RVA_PillarboxDataCave + 0x0C));
         uint32_t* pGsVirtualW         = reinterpret_cast<uint32_t*>(g_ExeBase + AczRva(RVA_GsVirtualWidth));
 
-        int aspect_opt = GetGameAspectOption();
-        if (aspect_opt == 2 && !ws_menu_active) {
-            // 21:9 Ultrawide active on a non-overridden 4:3 menu (Briefing, etc.):
-            uint32_t render_w = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderWidth));
-            uint32_t render_h = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderHeight));
-            float aspect = (render_w > 0 && render_h > 0)
-                ? (static_cast<float>(render_w) / static_cast<float>(render_h))
-                : (21.0f / 9.0f);
-            if (aspect < 1.8f) {
-                aspect = 21.0f / 9.0f;
+        const float aspect = GetEffectiveAspectRatio();
+        if (aspect <= 1.38f) {
+            // Native 4:3 / 5:4 output (1:1 SwapChain & GS RT, <1.6778f crop disabled):
+            // Fill the full 512-wide GS canvas edge-to-edge without pillarbox bars!
+            *pGsVirtualW         = 512u;
+            *pLeft               = 0.0f;
+            *pRight              = 1.0f;
+            *pSpiderCenter       = 28672.0f;
+            *pAssaultModelCenter = 1900.0f;
+        } else if (ws_menu_active) {
+            if (g_InsideDebriefingDrawForAspect) {
+                // Continuous Debriefing 2D/3D viewport width for any aspect ratio (16:10, 16:9, 21:9, 32:9)
+                *pGsVirtualW         = static_cast<uint32_t>(std::lroundf(512.0f * (aspect / (4.0f / 3.0f))));
+                *pLeft               = 0.0f;
+                *pRight              = 1.0f;
+                *pSpiderCenter       = 28672.0f;
+                *pAssaultModelCenter = 1900.0f;
+            } else {
+                int target_tier = GetTargetMenuAspectTier();
+                if (target_tier == 2) {
+                    // 21:9 Ultrawide custom menu override (896-wide canvas, dx_left = -184.0 SWG px):
+                    *pGsVirtualW         = 896u;
+                    *pLeft               = 0.0f;
+                    *pRight              = 1.0f;
+                    *pSpiderCenter       = 28672.0f + (-184.0f * 16.0f);
+                    *pAssaultModelCenter = 1900.0f - 184.0f;
+                } else {
+                    // 16:9 Widescreen custom menu override (682-wide canvas, dx_left = -77.0 SWG px):
+                    *pGsVirtualW         = 682u;
+                    *pLeft               = 0.0f;
+                    *pRight              = 1.0f;
+                    *pSpiderCenter       = 28672.0f + (-77.0f * 16.0f);
+                    *pAssaultModelCenter = 1900.0f - 77.0f;
+                }
             }
-
-            // Fraction of the ultrawide display occupied by a 4:3 pillarbox (4/7 = 0.57142857f for 21:9)
-            float scale = (4.0f / 3.0f) / aspect;
-            uint32_t gs_virtual_w = static_cast<uint32_t>((512.0f / scale) + 0.5f); // 896 for 21:9
-            float left_frac  = (1.0f - scale) * 0.5f; // 0.21428572f (411 / 1920)
-            float right_frac = 1.0f - left_frac;      // 0.78571427f (1508 / 1920)
+        } else {
+            // Non-overridden 4:3 menu on ANY widescreen aspect (> 1.38: 3:2, 16:10, 16:9, 1920x822, 21:9, 32:9):
+            // Continuously compute exact centered 4:3 pillarbox bounds and GS virtual width!
+            const float scale = (4.0f / 3.0f) / aspect;
+            const uint32_t gs_virtual_w = static_cast<uint32_t>(std::lroundf(512.0f / scale));
+            const float left_frac  = (1.0f - scale) * 0.5f;
+            const float right_frac = 1.0f - left_frac;
 
             *pGsVirtualW         = gs_virtual_w;
             *pLeft               = left_frac;
             *pRight              = right_frac;
-            *pSpiderCenter       = 28672.0f; // Stock 4:3 spider chart X center (1792.0 * 16.0)
-            *pAssaultModelCenter = 1900.0f;  // Stock 4:3 AssaultRecord 3D miniature aircraft X center
-        } else if (ws_menu_active) {
-            int target_tier = GetTargetMenuAspectTier();
-            if (target_tier == 2) {
-                // 21:9 Ultrawide custom menu override (896-wide canvas, dx_left = -184.0 SWG px):
-                *pGsVirtualW         = 896u;
-                *pLeft               = 0.0f;
-                *pRight              = 1.0f;
-                *pSpiderCenter       = 28672.0f + (-184.0f * 16.0f); // 25728.0f (aligns with shifted [STATISTICS] hexagon)
-                *pAssaultModelCenter = 1900.0f - 184.0f;             // 1716.0f  (aligns 3D miniature aircraft with [PILOT DATA] pane)
-            } else {
-                // 16:9 Widescreen custom menu override (682-wide canvas, dx_left = -77.0 SWG px):
-                *pGsVirtualW         = 682u;
-                *pLeft               = 0.0f;
-                *pRight              = 1.0f;
-                *pSpiderCenter       = 28672.0f + (-77.0f * 16.0f);  // 27440.0f (aligns with shifted [STATISTICS] hexagon)
-                *pAssaultModelCenter = 1900.0f - 77.0f;              // 1823.0f  (aligns 3D miniature aircraft with [PILOT DATA] pane)
-            }
-        } else {
-            // Stock 16:9 / 4:3 mode (pillarbox):
-            *pGsVirtualW         = 682u;
-            *pLeft               = 0.125f;
-            *pRight              = 0.875f;
             *pSpiderCenter       = 28672.0f;
             *pAssaultModelCenter = 1900.0f;
         }
@@ -1480,56 +1505,38 @@ static void* __fastcall Hook_DrawMovieQuad(void* a1, void* a2, void* a3, void* a
         if (a1 != nullptr) {
             is_4x3_movie = *reinterpret_cast<const uint8_t*>(reinterpret_cast<const uint8_t*>(a1) + 0x57A);
         }
-        int aspect_opt = GetGameAspectOption();
+        const float aspect = GetEffectiveAspectRatio();
         float scale_x = 1.0f;
         float scale_y = 1.0f;
 
-        if (aspect_opt == 2) {
-            // 21:9 Ultrawide mode:
-            uint32_t render_w = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderWidth));
-            uint32_t render_h = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderHeight));
-            float aspect = (render_w > 0 && render_h > 0)
-                ? (static_cast<float>(render_w) / static_cast<float>(render_h))
-                : (21.0f / 9.0f);
-            if (aspect < 1.8f) {
-                aspect = 21.0f / 9.0f;
-            }
-            if (is_4x3_movie != 0) {
-                // Briefing (already 0.75 wide in RT 0): scale RT 0 by (16/9)/aspect (0.7619048f)
-                // so 0.75 * 16/21 = 4/7 (0.5714286f), exact 4:3 proportions inside 21:9!
+        if (is_4x3_movie != 0) {
+            // Briefing video occupies center 0.75 width (1440x1080) of 16:9 RT #0.
+            // With <1.6778f SwapChain crop disabled, map the center 0.75 region to exact 4:3 on ANY aspect!
+            if (aspect >= (4.0f / 3.0f)) {
                 scale_x = (16.0f / 9.0f) / aspect;
                 scale_y = 1.0f;
             } else {
-                // Cutscene / Interview (16:9 with baked-in top/bottom black bars, active height 397/440):
-                // Zoom vertically by 440/397 (1.1083123f) to eliminate the baked-in top/bottom black bars,
-                // and compress horizontally by scale_y * ((16/9)/aspect) (0.8444284f) for true 1:1 proportions!
-                scale_y = 440.0f / 397.0f;
-                scale_x = scale_y * ((16.0f / 9.0f) / aspect);
+                // Narrower than 4:3 (e.g. 5:4): fit 4:3 width cleanly and letterbox vertically
+                scale_x = 4.0f / 3.0f;
+                scale_y = aspect / (4.0f / 3.0f);
             }
-        } else if (aspect_opt == 1) {
-            // 16:9 Widescreen mode:
-            // Both Briefing (already 0.75 pillarboxed in RT 0) and Cutscene (1.0 in RT 0) use 1:1 RT 0 mapping.
-            scale_x = 1.0f;
-            scale_y = 1.0f;
         } else {
-            // 4:3 Standard mode (SwapChain Scissor clips output to middle 0.75 width):
-            if (is_4x3_movie != 0) {
-                // Briefing is already 0.75 wide in RT 0, matching the 0.75-wide 4:3 SwapChain Scissor 1:1!
+            // Cutscene / Interview video occupies full 16:9 RT #0 with baked-in letterbox bars (active height 397/440).
+            if (aspect <= (16.0f / 9.0f)) {
+                // 4:3, 5:4, 3:2, 16:10, 16:9: exact 16:9 fit-to-width with clean vertical letterboxing
                 scale_x = 1.0f;
-                scale_y = 1.0f;
+                scale_y = aspect / (16.0f / 9.0f);
             } else {
-                // Cutscene is 1.0 wide in RT 0: scale by 0.75 in both X and Y so it fits inside the
-                // 0.75-wide 4:3 SwapChain Scissor with proper 16:9 letterboxing!
-                scale_x = 0.75f;
-                scale_y = 0.75f;
+                // Ultrawide (> 16:9: 21:9, 1920x822, 32:9): smoothly strip baked-in letterbox bars up to 440/397
+                scale_y = (std::min)(440.0f / 397.0f, aspect / (16.0f / 9.0f));
+                scale_x = scale_y * ((16.0f / 9.0f) / aspect);
             }
         }
 
         if (pVideoOrthoW) *pVideoOrthoW = 2.0f / scale_x;
         if (pVideoOrthoH) *pVideoOrthoH = -2.0f / scale_y;
 
-        // Ensure 4:3 pillarbox scissor & GsVirtualWidth (896 in 21:9, 682 in 16:9/4:3) are active
-        // for Briefing overlays and subtitles:
+        // Ensure 4:3 pillarbox scissor & GsVirtualWidth match active aspect for Briefing overlays and subtitles:
         g_CurrentMenuHasWsOverride.store(false, std::memory_order_relaxed);
         SetWidescreenMenuScissorOverride(false);
     }
@@ -1538,9 +1545,11 @@ static void* __fastcall Hook_DrawMovieQuad(void* a1, void* a2, void* a3, void* a
 
 static void SyncSwgInstanceAspect(void* swg_instance, bool update_scissor) {
     if (g_ExeBase != 0) {
+        const int eff_opt = GetGameAspectOption();
+        g_ScreenAspect = eff_opt;
         int32_t* pScreenSize = reinterpret_cast<int32_t*>(g_ExeBase + AczRva(RVA_ScreenSizeOption));
-        if (*pScreenSize != g_ScreenAspect) {
-            *pScreenSize = g_ScreenAspect;
+        if (*pScreenSize != eff_opt) {
+            *pScreenSize = eff_opt;
         }
     }
     if (swg_instance == nullptr) return;
@@ -1569,13 +1578,23 @@ static void SyncSwgInstanceAspect(void* swg_instance, bool update_scissor) {
 }
 
 
+static bool ShouldSuppressSwgUpdateForCustomUi(const std::string& stem);
+static bool TryInterceptSwgMenuForCustomUi(const std::string& stem, void* swg_sound, void* swg_instance);
+static bool UpdateCustomUiFromInput(uint16_t pad_btns, float stick_x, float stick_y, acz_ui::InputDeviceKind dev_kind);
+
 static void __fastcall Hook_CSwgInstanceUpdate(void* this_ptr) {
     SyncSwgInstanceAspect(this_ptr, true);
+    if (g_EnableCustomUI && this_ptr != nullptr) {
+        uint8_t* swg_data = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(this_ptr) + 0x08);
+        if (swg_data != nullptr && std::memcmp(swg_data, "SWG\0", 4) == 0) {
+            std::string stem = ResolveSwgMenuStem(swg_data);
+            if (ShouldSuppressSwgUpdateForCustomUi(stem)) {
+                return; // Pause hidden MainSelect.swa update so its internal idle attract timer never fires while our custom UI is active
+            }
+        }
+    }
     g_OrigCSwgInstanceUpdate(this_ptr);
 }
-
-static bool TryInterceptSwgMenuForCustomUi(const std::string& stem);
-static bool UpdateCustomUiFromInput(uint16_t pad_btns, float stick_x, float stick_y, acz_ui::InputDeviceKind dev_kind);
 
 static void* __fastcall Hook_CSwadMenuDraw(void* this_ptr, void* a2) {
     if (this_ptr != nullptr) {
@@ -1585,7 +1604,8 @@ static void* __fastcall Hook_CSwadMenuDraw(void* this_ptr, void* a2) {
             uint8_t* swg_data = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(swg_instance) + 0x08);
             if (swg_data != nullptr && std::memcmp(swg_data, "SWG\0", 4) == 0) {
                 std::string stem = ResolveSwgMenuStem(swg_data);
-                if (TryInterceptSwgMenuForCustomUi(stem)) {
+                void* swg_sound = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(swg_instance) + 0x1D0);
+                if (TryInterceptSwgMenuForCustomUi(stem, swg_sound, swg_instance)) {
                     return a2; // Suppress legacy SWAD/SWG rendering while preserving GIF DMA cursor
                 }
             }
@@ -1697,28 +1717,17 @@ static uint8_t* __fastcall Hook_LoadingScreenDraw(void* this_ptr, uint8_t* gif_b
                 }
             }
 
-            int aspect_opt = GetGameAspectOption();
-            float true_virtual_w = 512.0f;
-            if (aspect_opt == 2) {
-                uint32_t render_w = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderWidth));
-                uint32_t render_h = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderHeight));
-                float aspect = (render_w > 0 && render_h > 0)
-                    ? (static_cast<float>(render_w) / static_cast<float>(render_h))
-                    : (21.0f / 9.0f);
-                if (aspect < 1.8f) {
-                    aspect = 21.0f / 9.0f;
-                }
-                true_virtual_w = 512.0f * (aspect / (4.0f / 3.0f)); // 896.0f for 21:9
-            } else if (aspect_opt == 1) {
-                true_virtual_w = 512.0f * ((16.0f / 9.0f) / (4.0f / 3.0f)); // 682.666687f for 16:9
-            }
+            const float aspect = GetEffectiveAspectRatio();
+            const float true_virtual_w = (aspect > 1.38f)
+                ? (512.0f * (aspect / (4.0f / 3.0f)))
+                : 512.0f;
 
             float target_virtual_w = 512.0f;
             if (is_ws != 0) {
                 target_virtual_w = true_virtual_w;
-            } else if (aspect_opt == 2) {
+            } else if (aspect > 1.38f) {
                 uint32_t gs_vw = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_GsVirtualWidth));
-                if (gs_vw >= 512u && gs_vw < 750u) {
+                if (gs_vw >= 512u && std::fabs(true_virtual_w - static_cast<float>(gs_vw)) > 4.0f) {
                     target_virtual_w = 512.0f * (true_virtual_w / static_cast<float>(gs_vw));
                 }
             }
@@ -1776,20 +1785,16 @@ static FnCutsceneSubFontDrawEmblem g_OrigCutsceneSubFontDrawEmblem = nullptr;
 static FnCutsceneFontDraw          g_OrigCutsceneFontDraw          = nullptr;
 
 static void ComputeCutsceneWidescreenScales(int aspect_opt, float* out_ws_16x9_to_actual_x, float* out_ws_4x3_to_actual_x) {
+    (void)aspect_opt;
+    const float aspect = GetEffectiveAspectRatio();
     float ws_16x9 = 1.0f;
-    if (aspect_opt == 2 && g_ExeBase != 0) {
-        uint32_t render_w = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderWidth));
-        uint32_t render_h = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_RenderHeight));
-        float aspect = (render_w > 0 && render_h > 0)
-            ? (static_cast<float>(render_w) / static_cast<float>(render_h))
-            : (21.0f / 9.0f);
-        if (aspect < 1.8f) {
-            aspect = 21.0f / 9.0f;
-        }
+    float ws_4x3  = 1.0f;
+    if (aspect > 1.38f) {
         ws_16x9 = (16.0f / 9.0f) / aspect;
+        ws_4x3  = (4.0f / 3.0f) / aspect;
     }
     if (out_ws_16x9_to_actual_x) *out_ws_16x9_to_actual_x = ws_16x9;
-    if (out_ws_4x3_to_actual_x)  *out_ws_4x3_to_actual_x  = 0.75f * ws_16x9;
+    if (out_ws_4x3_to_actual_x)  *out_ws_4x3_to_actual_x  = ws_4x3;
 }
 
 static void ScaleCutsceneGifPacketsX(
@@ -2120,34 +2125,20 @@ static void __fastcall Hook_GsBuildProjectionMatrices(uint8_t* gs_cfg) {
             const float   h    = *reinterpret_cast<const float*>(gs_cfg + 0x04);
             const int16_t gs_w = *reinterpret_cast<const int16_t*>(gs_cfg + 0x28);
             if ((h == 360.0f && gs_w == 512) || (h == 180.0f && gs_w == 256)) {
-                const uint8_t is_ws      = *reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_CSysDataIsWidescreen));
-                const int     aspect_opt = GetGameAspectOption();
+                const uint8_t is_ws       = *reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_CSysDataIsWidescreen));
+                const float   aspect      = GetEffectiveAspectRatio();
                 const float   base_16x9_w = h * (16.0f / 9.0f); // 640.0f or 320.0f
                 float         target_w    = base_16x9_w;
-                if (is_ws != 0 && aspect_opt == 2) {
-                    float ws_16x9_to_actual_x = 1.0f;
-                    ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
-                    if (ws_16x9_to_actual_x > 0.1f) {
-                        target_w = base_16x9_w / ws_16x9_to_actual_x; // 840.0f for 21:9
-                    }
+                if (is_ws != 0 && aspect > 1.38f) {
+                    target_w = h * aspect; // Exact continuous Hor+ 3D FOV for 16:10, 16:9, 21:9, 1920x822, 32:9, etc.
                 }
                 *reinterpret_cast<float*>(gs_cfg + 0x00)   = target_w;
                 *reinterpret_cast<float*>(gs_cfg + 0x198)  = static_cast<float>(gs_w) / target_w;
             } else if (g_InsideDebriefingDraw && h == 448.0f && gs_w == 512) {
-                // AVModeDebriefing::Draw 3D Tactical Map (debrief_obj + 0x3B68):
-                // Expand the 3D frustum clip planes ([gs_cfg + 0x150]) from 512.0f (4:3 pillarbox)
-                // to the full 16:9 (684.0f) or 21:9 (898.0f) viewport width while preserving 1:1
-                // unstretched camera projection (scale_x = 1.0f, scale_y = 1.0f) so 3D terrain
-                // wireframe grid lines, flight paths, and unit icons extend edge-to-edge across the screen.
-                const int target_tier = g_EnableMenuOverrides ? GetTargetMenuAspectTier() : GetGameAspectOption();
-                float target_frustum_w = 512.0f;
-                if (target_tier == 2) {
-                    float ws_16x9_to_actual_x = 1.0f;
-                    ComputeCutsceneWidescreenScales(2, &ws_16x9_to_actual_x, nullptr);
-                    target_frustum_w = (ws_16x9_to_actual_x > 0.1f) ? (684.0f / ws_16x9_to_actual_x) : 898.0f;
-                } else if (target_tier == 1) {
-                    target_frustum_w = 684.0f;
-                }
+                const float aspect = GetEffectiveAspectRatio();
+                const float target_frustum_w = (aspect > 1.38f)
+                    ? (512.0f * (aspect / (4.0f / 3.0f)) + 2.0f)
+                    : 512.0f;
                 *reinterpret_cast<uint32_t*>(gs_cfg + 0x1A0) &= ~1u; // Keep scale_x = 1.0f independent of proj_width
                 *reinterpret_cast<float*>(gs_cfg + 0x198) = 1.0f;
                 *reinterpret_cast<float*>(gs_cfg + 0x19C) = 1.0f;
@@ -2276,18 +2267,19 @@ static uint8_t* __fastcall Hook_HudFixedWidget_VirtualDraw40(void* self, uint8_t
 //     - Sets g_InsideDebriefingDraw = true so Hook_GsBuildProjectionMatrices expands the 3D Tactical Map
 //       frustum clip planes from 512.0f (4:3) to 684.0f (16:9) / 898.0f (21:9) edge-to-edge.
 static uint8_t* __fastcall Hook_DebriefingDraw(uint8_t* debrief_obj, uint8_t* gif_buf) {
+    g_InsideDebriefingDraw = true;
+    g_InsideDebriefingDrawForAspect = true;
     if (debrief_obj != nullptr) {
         const uint8_t is_active = debrief_obj[0xD2B5];
         if (is_active != 0) {
-            const int target_tier = g_EnableMenuOverrides ? GetTargetMenuAspectTier() : GetGameAspectOption();
-            SetWidescreenMenuScissorOverride(target_tier > 0);
+            SetWidescreenMenuScissorOverride(GetEffectiveAspectRatio() > 1.38f);
         } else {
             SetWidescreenMenuScissorOverride(false);
         }
     }
-    g_InsideDebriefingDraw = true;
     uint8_t* ret = g_OrigDebriefingDraw(debrief_obj, gif_buf);
     g_InsideDebriefingDraw = false;
+    g_InsideDebriefingDrawForAspect = false;
     return ret;
 }
 
@@ -2483,13 +2475,15 @@ static uint8_t* __fastcall Hook_Radar_VirtualDraw40(void* self, uint8_t* gif_buf
     if (self != nullptr && gif_buf != nullptr && gif_end > gif_buf && g_ExeBase != 0) {
         const uint8_t is_ws      = *reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_CSysDataIsWidescreen));
         const int     aspect_opt = GetGameAspectOption();
-        if (is_ws != 0 && aspect_opt == 2) {
+        if (is_ws != 0 && aspect_opt > 0) {
             float ws_16x9_to_actual_x = 1.0f;
             ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
-            const int32_t rx = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(self) + 0x20);
-            const int32_t rw = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(self) + 0x28);
-            const float   radar_center_subpx = (static_cast<float>(rx) + static_cast<float>(rw) * 0.5f + 1792.0f) * 16.0f;
-            ScaleHudGifPacketsX(gif_buf, gif_end, radar_center_subpx, radar_center_subpx, ws_16x9_to_actual_x, true);
+            if (std::fabs(ws_16x9_to_actual_x - 1.0f) > 0.002f) {
+                const int32_t rx = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(self) + 0x20);
+                const int32_t rw = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(self) + 0x28);
+                const float   radar_center_subpx = (static_cast<float>(rx) + static_cast<float>(rw) * 0.5f + 1792.0f) * 16.0f;
+                ScaleHudGifPacketsX(gif_buf, gif_end, radar_center_subpx, radar_center_subpx, ws_16x9_to_actual_x, true);
+            }
         }
     }
     return gif_end;
@@ -2571,9 +2565,9 @@ static uint8_t* __fastcall Hook_CHudManagerDraw(uint8_t* hud_mgr, uint8_t* gif_b
                         rx = static_cast<float>(*reinterpret_cast<const int32_t*>(r0 + 0x20));
                         rw = static_cast<float>(*reinterpret_cast<const int32_t*>(r0 + 0x28));
                     }
-                    if (aspect_opt == 2) {
-                        float ws_16x9_to_actual_x = 1.0f;
-                        ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
+                    float ws_16x9_to_actual_x = 1.0f;
+                    ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
+                    if (std::fabs(ws_16x9_to_actual_x - 1.0f) > 0.002f) {
                         const float radar_center_px = rx + rw * 0.5f;
                         const float radar_left_px   = radar_center_px - (rw * 0.5f) * ws_16x9_to_actual_x;
                         g_CurrentRadarLeftSubpx     = (radar_left_px + 1792.0f) * 16.0f;
@@ -2660,10 +2654,12 @@ static uint8_t* __fastcall Hook_PauseMenuDraw(void* self, uint8_t* gif_buf, void
     if (gif_buf != nullptr && gif_end > gif_buf && g_ExeBase != 0) {
         const uint8_t is_ws      = *reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_CSysDataIsWidescreen));
         const int     aspect_opt = GetGameAspectOption();
-        if (is_ws != 0 && aspect_opt == 2) {
+        if (is_ws != 0 && aspect_opt > 0) {
             float ws_16x9_to_actual_x = 1.0f;
             ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
-            ScaleHudGifPacketsX(gif_buf, gif_end, 32768.0f, 32768.0f, ws_16x9_to_actual_x, true);
+            if (std::fabs(ws_16x9_to_actual_x - 1.0f) > 0.002f) {
+                ScaleHudGifPacketsX(gif_buf, gif_end, 32768.0f, 32768.0f, ws_16x9_to_actual_x, true);
+            }
         }
     }
     return gif_end;
@@ -2678,10 +2674,12 @@ static uint8_t* __fastcall Hook_PauseSubMenuDraw(void* self, uint8_t* gif_buf, v
     if (gif_buf != nullptr && gif_end > gif_buf && g_ExeBase != 0) {
         const uint8_t is_ws      = *reinterpret_cast<const uint8_t*>(g_ExeBase + AczRva(RVA_CSysDataIsWidescreen));
         const int     aspect_opt = GetGameAspectOption();
-        if (is_ws != 0 && aspect_opt == 2) {
+        if (is_ws != 0 && aspect_opt > 0) {
             float ws_16x9_to_actual_x = 1.0f;
             ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, nullptr);
-            ScaleHudGifPacketsX(gif_buf, gif_end, 32768.0f, 32768.0f, ws_16x9_to_actual_x, true);
+            if (std::fabs(ws_16x9_to_actual_x - 1.0f) > 0.002f) {
+                ScaleHudGifPacketsX(gif_buf, gif_end, 32768.0f, 32768.0f, ws_16x9_to_actual_x, true);
+            }
         }
     }
     return gif_end;
@@ -2891,14 +2889,15 @@ static uint8_t __fastcall Hook_CutsceneSubFontDrawEmblem(
         const int aspect_opt = GetGameAspectOption();
         // Squadron Emblem (align_mode 6) is already fitted for 16:9; in 21:9 (aspect_opt == 2),
         // map its X coordinates into the 16:9 frame so it stays circular and aligned with GALM / Ustio Air Force:
-        if (is_ws != 0 && aspect_opt == 2) {
+        if (is_ws != 0 && aspect_opt > 0) {
             float ws_16x9_to_actual_x = 1.0f;
             float ws_4x3_to_actual_x  = 0.75f;
             ComputeCutsceneWidescreenScales(aspect_opt, &ws_16x9_to_actual_x, &ws_4x3_to_actual_x);
-
-            const float offset_x     = *reinterpret_cast<const float*>(gs_env + 0x190);
-            const float center_subpx = offset_x * 16.0f;
-            ScaleCutsceneGifPacketsX(gif_before, gif_after, center_subpx, center_subpx, ws_16x9_to_actual_x);
+            if (std::fabs(ws_16x9_to_actual_x - 1.0f) > 0.002f) {
+                const float offset_x     = *reinterpret_cast<const float*>(gs_env + 0x190);
+                const float center_subpx = offset_x * 16.0f;
+                ScaleCutsceneGifPacketsX(gif_before, gif_after, center_subpx, center_subpx, ws_16x9_to_actual_x);
+            }
         }
     }
     return ret;
@@ -3947,6 +3946,16 @@ static void __fastcall Hook_SwgOptionSetAspect(void* rcx, void* rdx, void* r8, i
         if (aspect >= 0 && aspect <= 2) {
             g_ScreenAspect = aspect;
             SaveScreenAspectToIni(g_ScreenAspect);
+            if (acz_display::g_Installed) {
+                // Keep vanilla SCREEN RATIO menu working without letting stock SetScreenAspectAndResize hijack our custom resolution
+                const int ovr = (aspect == 0) ? acz_display::kAspect4x3
+                              : (aspect == 2) ? acz_display::kAspect21x9
+                                              : acz_display::kAspect16x9;
+                acz_display::SetAspectOverrideMode(ovr);
+                SaveAllEnhancerSettingsToIni();
+                LogMsg("[Enhancer] Vanilla menu changed ScreenAspect to %d -> mapped to AspectRatioOverride=%d.", aspect, ovr);
+                return;
+            }
             if (g_ExeBase != 0) {
                 *reinterpret_cast<int32_t*>(g_ExeBase + AczRva(RVA_ScreenSizeOption)) = g_ScreenAspect;
             }
@@ -4322,7 +4331,20 @@ static uint8_t PollWakeLogoSkipKeyboardMask() {
     return mask;
 }
 
+static std::atomic<bool> g_WakeLogoShouldFinish{false};
+
 static void __fastcall Hook_CModeWakeLogoUpdate(uint8_t* this_ptr, void* mode_mgr) {
+    if (this_ptr != nullptr) {
+        int32_t state = *reinterpret_cast<const int32_t*>(this_ptr + 0x90u);
+        if (state == 1 && g_EnableCustomUI && g_WakeLogoShouldFinish.exchange(false, std::memory_order_acq_rel)) {
+            *reinterpret_cast<int32_t*>(this_ptr + 0x90u) = 2; // Seamless custom WakeLogo completion -> CModeTitle
+            if (g_OrigCModeWakeLogoUpdate != nullptr) {
+                g_OrigCModeWakeLogoUpdate(this_ptr, mode_mgr);
+            }
+            return;
+        }
+    }
+
     if (this_ptr != nullptr && g_FastStartup == 1) {
         static uint16_t s_prev_btns = 0u;
         static uint8_t  s_prev_kb   = 0u;
@@ -4479,6 +4501,11 @@ static acz_ui::UiRenderer           g_UiRenderer;
 static acz_ui::UiFontManager        g_UiFonts;
 static acz_ui::UiInputController    g_UiInput;
 static acz_ui::OptionsScreen        g_OptionsScreen;
+static acz_ui::WakeLogoScreen       g_WakeLogoScreen;
+static acz_ui::MemCheckScreen       g_MemCheckScreen;
+static acz_ui::SaveLoadScreen       g_SaveLoadScreen;
+static acz_ui::OptionsSubScreen     g_OptionsSubScreen;
+static acz_ui::TitleScreen          g_TitleScreen;
 static acz_ui::RmlOptionsController g_RmlOptions;
 static std::mutex                   g_UiMutex;
 static bool                         g_UiEngineReady = false;
@@ -4495,7 +4522,31 @@ static std::atomic<uint8_t>         g_UiDevKindAtomic{0};
 static std::atomic<int>             g_UiPendingNativeAspect{-1};
 static uint64_t                     g_UiFrameCounter = 0;
 static uint64_t                     g_MainSelectLastSeenFrame = 0;
-static bool                         g_UseCustomMainMenu = true; // Toggled live via F1 in MainSelect!
+static uint64_t                     g_WakeLogoLastSeenFrame = 0;
+static uint64_t                     g_MemCheckLastSeenFrame = 0;
+static uint64_t                     g_SaveLoadLastSeenFrame = 0;
+static uint64_t                     g_OptionsSubLastSeenFrame = 0;
+static acz_ui::OptionsSubScreen::Kind g_OptionsSubLastKind  = acz_ui::OptionsSubScreen::Kind::None;
+static bool                         g_ReturnFromSaveLoad    = false;
+static constexpr uintptr_t          RVA_MemoryCardState     = 0x30F2C4u;
+static constexpr uintptr_t          RVA_MemoryCardReceiver  = 0x31DFC8u;
+static constexpr uintptr_t          RVA_MemoryCardArray     = 0x31DFD0u;
+static uint64_t                     g_TitleLastSeenFrame = 0;
+static bool                         g_TitleEnteredFromWakeLogo = false;
+static float                        g_SharedBackdropTimeSec = 0.0f;
+static uint64_t                     g_NativeSubMenuLastSeenFrame = 0;
+static bool                         g_UseCustomMainMenu = true; // Toggled live via F1 in Title / MainSelect!
+
+__declspec(noinline) static int32_t SafeReadSwgRootFrameSEH(void* swg_instance) {
+    if (swg_instance == nullptr) return 0;
+    __try {
+        uint8_t* root_mc = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(swg_instance) + 0x1E0);
+        if (root_mc == nullptr) return 0;
+        return *reinterpret_cast<const int32_t*>(root_mc + 0xF8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
 
 static double GetMonotonicSecondsUi() {
     static LARGE_INTEGER s_freq{};
@@ -4522,36 +4573,139 @@ static int MapSwgStemToOptionsTab(const std::string& stem) {
     return -1;
 }
 
-static bool TryInterceptSwgMenuForCustomUi(const std::string& stem) {
+static bool ShouldSuppressSwgUpdateForCustomUi(const std::string& stem) {
+    if (!g_UiEngineReady || !g_EnableCustomUI) return false;
+    if (stem == "MainSelect") {
+        return g_UseCustomMainMenu && g_RmlOptions.IsReady() && g_RmlOptions.IsMainMenuMode() && !g_RmlOptions.IsLeavingMainMenu();
+    }
+    if (stem == "SaveLoad") {
+        return g_UseCustomMainMenu && g_RmlOptions.IsReady() && g_SaveLoadScreen.IsActive() && !g_SaveLoadScreen.IsLeaving();
+    }
+    if (acz_ui::OptionsSubScreen::MapStemToKind(stem) != acz_ui::OptionsSubScreen::Kind::None) {
+        return g_UseCustomMainMenu && g_RmlOptions.IsReady() && g_OptionsSubScreen.IsActive() && !g_OptionsSubScreen.IsLeaving();
+    }
+    return false;
+}
+
+static bool TryInterceptSwgMenuForCustomUi(const std::string& stem, void* swg_sound, void* swg_instance) {
     if (!g_UiEngineReady) return false;
+
+    if (stem == "SaveLoad") {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_SaveLoadLastSeenFrame = g_UiFrameCounter;
+        if (swg_sound != nullptr) {
+            g_SaveLoadScreen.SetSwgSoundObject(swg_sound);
+        }
+        if (g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady()) {
+            if (g_ExeBase != 0) {
+                g_SaveLoadScreen.SetNativeDispatch(
+                    g_ExeBase + AczRva(RVA_MemoryCardReceiver),
+                    g_ExeBase + AczRva(RVA_MemoryCardArray),
+                    g_ExeBase + AczRva(RVA_MemoryCardState)
+                );
+            }
+            if (!g_SaveLoadScreen.IsActive()) {
+                g_SaveLoadScreen.Begin();
+                g_UiInput.ResetHeldState();
+            }
+            if (!g_SaveLoadScreen.IsLeaving()) {
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            return true; // Suppress legacy SaveLoad.swa; render our HTML/CSS saveload.rml!
+        }
+        return false;
+    }
+
+    if (stem == "MemCheck") {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_MemCheckLastSeenFrame = g_UiFrameCounter;
+        if (g_EnableCustomUI && g_UseCustomMainMenu) {
+            g_MemCheckScreen.Begin();
+            if (g_ExeBase != 0) {
+                const uint32_t mc_state = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_MemoryCardState));
+                g_MemCheckScreen.SetMemoryCardState(mc_state);
+            }
+            return true; // Suppress legacy MemCheck.swa; render our D3D12 MemCheckScreen!
+        }
+        return false;
+    }
+
+    if (stem == "WakeLogo") {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_WakeLogoLastSeenFrame = g_UiFrameCounter;
+        if (g_EnableCustomUI && g_UseCustomMainMenu) {
+            g_WakeLogoScreen.Begin();
+            g_WakeLogoScreen.SetNativeFrame(SafeReadSwgRootFrameSEH(swg_instance));
+            return true; // Suppress legacy WakeLogo.swa; render our D3D12 WakeLogoScreen!
+        }
+        return false;
+    }
+
+    if (stem == "Title") {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_TitleLastSeenFrame = g_UiFrameCounter;
+        if (g_EnableCustomUI && g_UseCustomMainMenu) {
+            const bool wasActive = g_TitleScreen.IsActive();
+            g_TitleScreen.Begin(g_TitleEnteredFromWakeLogo);
+            if (!wasActive && g_TitleEnteredFromWakeLogo && g_WakeLogoScreen.IsActive()) {
+                g_TitleScreen.AdoptAmbientSparks(g_WakeLogoScreen.ActiveSparks());
+            }
+            g_TitleScreen.SetNativeOutFrame(SafeReadSwgRootFrameSEH(swg_instance));
+            return true; // Suppress legacy Title.swa; render our D3D12 TitleScreen!
+        }
+        return false;
+    }
 
     if (stem == "MainSelect") {
         std::lock_guard<std::mutex> lock(g_UiMutex);
         g_MainSelectLastSeenFrame = g_UiFrameCounter;
+        if (swg_sound != nullptr) {
+            g_RmlOptions.SetSwgSoundObject(swg_sound);
+        }
+        const bool in_native_sub = (g_NativeSubMenuLastSeenFrame > 0) && ((g_UiFrameCounter - g_NativeSubMenuLastSeenFrame) <= 2u);
         if (g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady()) {
             if (!g_RmlOptions.IsMainMenuMode()) {
-                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+                const bool preserveTree = g_ReturnFromSaveLoad;
+                g_ReturnFromSaveLoad = false;
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen, !preserveTree, !preserveTree);
                 g_UiInput.ResetHeldState();
             }
-            g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            if (!in_native_sub) {
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
             return true; // Suppress legacy MainSelect.swa; render our HTML/CSS main_menu.rml!
         }
         return false; // Vanilla MainSelect.swa active (toggled via F1)
     }
 
-    if (!g_EnableCustomUI) return false;
-    const int tab = MapSwgStemToOptionsTab(stem);
-    if (tab < 0) return false;
-
-    std::lock_guard<std::mutex> lock(g_UiMutex);
-    if (!g_OptionsScreen.IsOpen()) {
-        g_OptionsScreen.Open(tab, true);
-        g_RmlOptions.OnOpened(g_OptionsScreen, tab, true);
-        g_UiInput.ResetHeldState();
-        g_UiIsOpenAtomic.store(true, std::memory_order_release);
-        LogMsg("[UI] Intercepted legacy SWG submenu '%s' -> opened ACZ D3D12 Options (tab=%d).", stem.c_str(), tab);
+    // Dedicated Options sub-screens (ControlSet, LanguageSet, SoundSet, Brightness, ScrPosition)
+    const auto optSubKind = acz_ui::OptionsSubScreen::MapStemToKind(stem);
+    if (optSubKind != acz_ui::OptionsSubScreen::Kind::None) {
+        std::lock_guard<std::mutex> lock(g_UiMutex);
+        g_OptionsSubLastSeenFrame = g_UiFrameCounter;
+        g_OptionsSubLastKind      = optSubKind;
+        if (swg_sound != nullptr) {
+            g_OptionsSubScreen.SetSwgSoundObject(swg_sound);
+        }
+        if (g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady()) {
+            if (g_ExeBase != 0) {
+                g_OptionsSubScreen.SetNativeResolver(g_ExeBase, [](uintptr_t r) { return AczRva(r); });
+            }
+            if (!g_OptionsSubScreen.IsActive() || g_OptionsSubScreen.ActiveKind() != optSubKind) {
+                g_OptionsSubScreen.Begin(optSubKind);
+                g_UiInput.ResetHeldState();
+            }
+            if (!g_OptionsSubScreen.IsLeaving()) {
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            return true; // Suppress legacy Options submenu .swa; render custom RmlUi!
+        }
+        g_NativeSubMenuLastSeenFrame = g_UiFrameCounter;
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        return false;
     }
-    return true;
+
+    return false;
 }
 
 // Called from PollAllInputDevices (may run on a worker/input thread):
@@ -4599,13 +4753,168 @@ static void TickCustomUiOnMainThread() {
     const bool f5_edge = f5_now && !g_PrevF5Down;
     g_PrevF5Down = f5_now;
 
+    const bool in_options_sub = (g_OptionsSubLastSeenFrame > 0) && ((g_UiFrameCounter - g_OptionsSubLastSeenFrame) <= 2u);
+    if (in_options_sub && g_EnableCustomUI && g_RmlOptions.IsReady()) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            if (!g_UseCustomMainMenu) {
+                g_OptionsSubScreen.End(g_RmlOptions);
+                g_UiIsOpenAtomic.store(false, std::memory_order_release);
+                g_UiPostCloseSuppressFrames.store(6, std::memory_order_relaxed);
+            } else {
+                g_OptionsSubScreen.Begin(g_OptionsSubLastKind);
+                g_UiInput.ResetHeldState();
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            LogMsg("[UI] Switched OptionsSub mode -> %s (F1)", g_UseCustomMainMenu ? "Custom RmlUi" : "Vanilla SWG");
+        }
+        if (g_UseCustomMainMenu) {
+            g_RmlOptions.UpdateSharedMenuSparks(dt_sec);
+            g_OptionsSubScreen.Update(snap, dt_sec, f5_edge);
+            if (g_OptionsSubScreen.IsLeaving()) {
+                g_UiIsOpenAtomic.store(false, std::memory_order_release);
+            } else {
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            return;
+        }
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        return; // Never fall through into legacy F1 overlay while in OptionsSub!
+    } else if (g_OptionsSubScreen.IsActive()) {
+        g_OptionsSubScreen.End(g_RmlOptions);
+        g_ReturnFromSaveLoad = true;
+        if (!g_RmlOptions.IsMainMenuMode() && !g_OptionsScreen.IsOpen()) {
+            g_UiIsOpenAtomic.store(false, std::memory_order_release);
+            g_UiPostCloseSuppressFrames.store(6, std::memory_order_relaxed);
+        }
+    }
+
+    const bool in_saveload  = (g_SaveLoadLastSeenFrame > 0) && ((g_UiFrameCounter - g_SaveLoadLastSeenFrame) <= 2u);
+    if (in_saveload && g_EnableCustomUI && g_RmlOptions.IsReady()) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            if (!g_UseCustomMainMenu) {
+                g_SaveLoadScreen.End(g_RmlOptions);
+                g_UiIsOpenAtomic.store(false, std::memory_order_release);
+                g_UiPostCloseSuppressFrames.store(6, std::memory_order_relaxed);
+            } else {
+                g_SaveLoadScreen.Begin();
+                g_UiInput.ResetHeldState();
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            LogMsg("[UI] Switched SaveLoad mode -> %s (F1)", g_UseCustomMainMenu ? "Custom RmlUi" : "Vanilla SWG");
+        }
+        if (g_UseCustomMainMenu) {
+            g_RmlOptions.UpdateSharedMenuSparks(dt_sec);
+            g_SaveLoadScreen.Update(snap, dt_sec, f5_edge);
+            if (g_SaveLoadScreen.IsLeaving()) {
+                g_UiIsOpenAtomic.store(false, std::memory_order_release);
+            } else {
+                g_UiIsOpenAtomic.store(true, std::memory_order_release);
+            }
+            return;
+        }
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        return; // Never fall through into legacy F1 overlay while in SaveLoad!
+    } else if (g_SaveLoadScreen.IsActive()) {
+        g_SaveLoadScreen.End(g_RmlOptions);
+        g_ReturnFromSaveLoad = true;
+        if (!g_RmlOptions.IsMainMenuMode() && !g_OptionsScreen.IsOpen()) {
+            g_UiIsOpenAtomic.store(false, std::memory_order_release);
+            g_UiPostCloseSuppressFrames.store(6, std::memory_order_relaxed);
+        }
+    }
+
+    const bool in_memcheck  = (g_MemCheckLastSeenFrame > 0) && ((g_UiFrameCounter - g_MemCheckLastSeenFrame) <= 2u);
+    if (in_memcheck && g_EnableCustomUI) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            LogMsg("[UI] Switched MemCheck mode -> %s (F1)", g_UseCustomMainMenu ? "Custom D3D12" : "Vanilla SWG");
+        }
+        if (g_UseCustomMainMenu) {
+            g_MemCheckScreen.Begin();
+            if (g_ExeBase != 0) {
+                const uint32_t mc_state = *reinterpret_cast<const uint32_t*>(g_ExeBase + AczRva(RVA_MemoryCardState));
+                g_MemCheckScreen.SetMemoryCardState(mc_state);
+            }
+            g_MemCheckScreen.Update(dt_sec);
+        }
+    } else if (g_MemCheckScreen.IsActive()) {
+        g_MemCheckScreen.Reset();
+    }
+
+    const bool in_title     = (g_TitleLastSeenFrame > 0) && ((g_UiFrameCounter - g_TitleLastSeenFrame) <= 2u);
+    const bool in_wakelogo_raw = (g_WakeLogoLastSeenFrame > 0) && ((g_UiFrameCounter - g_WakeLogoLastSeenFrame) <= 2u);
+    // Bridge the 1..20 frame gap while CModeWakeLogo exits and CModeTitle::Init loads Title.swa
+    const bool bridging_to_title = !in_title && g_TitleEnteredFromWakeLogo && g_WakeLogoScreen.IsActive()
+        && (g_WakeLogoLastSeenFrame > 0) && ((g_UiFrameCounter - g_WakeLogoLastSeenFrame) <= 30u)
+        && g_WakeLogoShouldFinish.load(std::memory_order_acquire);
+    const bool in_wakelogo = !in_title && (in_wakelogo_raw || bridging_to_title);
+
+    if (in_wakelogo || in_title) {
+        g_SharedBackdropTimeSec += dt_sec;
+    }
+
+    if (in_wakelogo && g_EnableCustomUI) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            g_UiInput.ResetHeldState();
+            LogMsg("[UI] F1 A/B Toggle -> %s WakeLogo", g_UseCustomMainMenu ? "CUSTOM D3D12" : "VANILLA WakeLogo.swa");
+        }
+        if (g_UseCustomMainMenu) {
+            g_WakeLogoScreen.Begin();
+            g_WakeLogoScreen.Update(dt_sec);
+            g_TitleEnteredFromWakeLogo = true;
+            if (g_WakeLogoScreen.ShouldFinish()) {
+                g_WakeLogoShouldFinish.store(true, std::memory_order_release);
+            }
+        }
+        g_UiIsOpenAtomic.store(false, std::memory_order_release); // Keep native / FastStartup skip input working
+        return;
+    } else if (g_WakeLogoScreen.IsActive()) {
+        if (in_title && g_EnableCustomUI && g_UseCustomMainMenu && g_TitleEnteredFromWakeLogo) {
+            g_TitleScreen.Begin(true);
+            g_TitleScreen.AdoptAmbientSparks(g_WakeLogoScreen.ActiveSparks());
+        }
+        g_WakeLogoScreen.ResetAndRelease(g_UiRenderer);
+        g_WakeLogoShouldFinish.store(false, std::memory_order_release);
+    }
+
+    if (in_title && g_EnableCustomUI) {
+        if (snap.toggleUi) {
+            g_UseCustomMainMenu = !g_UseCustomMainMenu;
+            g_UiInput.ResetHeldState();
+            LogMsg("[UI] F1 A/B Toggle -> %s Title", g_UseCustomMainMenu ? "CUSTOM D3D12" : "VANILLA Title.swa");
+        }
+        if (f5_edge) {
+            g_TitleScreen.ReloadStrings();
+        }
+        if (g_UseCustomMainMenu) {
+            g_TitleScreen.Begin(g_TitleEnteredFromWakeLogo);
+            g_TitleScreen.Update(dt_sec);
+        }
+        g_UiIsOpenAtomic.store(false, std::memory_order_release); // Keep native Title.swa button input (frame 147+) working
+        return;
+    } else if (g_TitleScreen.IsActive()) {
+        g_TitleScreen.ResetAndRelease(g_UiRenderer);
+        g_TitleEnteredFromWakeLogo = false;
+    }
+
+    const bool in_native_submenu = (g_NativeSubMenuLastSeenFrame > 0) && ((g_UiFrameCounter - g_NativeSubMenuLastSeenFrame) <= 2u);
+    if (in_native_submenu) {
+        // Yield input & rendering to the active native Options sub-screen without resetting MainSelect state
+        g_UiIsOpenAtomic.store(false, std::memory_order_release);
+        g_UiInput.ResetHeldState();
+        return;
+    }
+
     const bool in_main_select = (g_MainSelectLastSeenFrame > 0) && ((g_UiFrameCounter - g_MainSelectLastSeenFrame) <= 2u);
     if (in_main_select && g_EnableCustomUI && g_RmlOptions.IsReady()) {
         if (snap.toggleUi) {
             g_UseCustomMainMenu = !g_UseCustomMainMenu;
             g_UiInput.ResetHeldState();
             if (g_UseCustomMainMenu) {
-                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen, false);
                 g_UiIsOpenAtomic.store(true, std::memory_order_release);
                 LogMsg("[UI] F1 A/B Toggle -> CUSTOM HTML/CSS Main Menu (main_menu.rml)");
             } else {
@@ -4617,7 +4926,9 @@ static void TickCustomUiOnMainThread() {
         }
         if (g_UseCustomMainMenu) {
             if (!g_RmlOptions.IsMainMenuMode()) {
-                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen);
+                const bool preserveTree = g_ReturnFromSaveLoad;
+                g_ReturnFromSaveLoad = false;
+                g_RmlOptions.EnterMainMenuMode(g_OptionsScreen, !preserveTree, !preserveTree);
             }
             g_UiIsOpenAtomic.store(true, std::memory_order_release);
             g_RmlOptions.UpdateMainMenu(g_OptionsScreen, snap, dt_sec, f5_edge, g_Unlock2PlayerCampaign);
@@ -4627,7 +4938,11 @@ static void TickCustomUiOnMainThread() {
         return;
     }
 
-    // Left MainSelect: release MainMenu input capture if Options overlay is not open
+    // Left MainSelect: clear cached SWG sound object and release MainMenu input capture if Options overlay is not open
+    g_RmlOptions.SetSwgSoundObject(nullptr);
+    if (g_RmlOptions.IsMainMenuMode()) {
+        g_RmlOptions.ExitMainMenuMode();
+    }
     if (!g_OptionsScreen.IsOpen()) {
         g_UiIsOpenAtomic.store(false, std::memory_order_release);
         if (snap.toggleUi) {
@@ -4652,7 +4967,7 @@ static void TickCustomUiOnMainThread() {
     }
 }
 
-static void RenderCustomUiOnD3D12SEH(uint8_t* d3d_ctx, bool render_main_menu) {
+static void RenderCustomUiOnD3D12SEH(uint8_t* d3d_ctx, bool render_main_menu, bool render_title, bool render_wakelogo, bool render_memcheck, bool render_saveload, bool render_options_sub) {
     if (!d3d_ctx) return;
     __try {
         uint32_t backbuf_idx             = (*reinterpret_cast<const uint32_t*>(d3d_ctx + 0x00)) & 1u;
@@ -4661,8 +4976,29 @@ static void RenderCustomUiOnD3D12SEH(uint8_t* d3d_ctx, bool render_main_menu) {
         ID3D12Resource* backbuffer       = *reinterpret_cast<ID3D12Resource* const*>(d3d_ctx + static_cast<size_t>(backbuf_idx) * 8u + 0x48);
         if (!device || !clist || !backbuffer) return;
 
-        if (!g_UiRenderer.BeginFrame(device, backbuffer, backbuf_idx)) return;
-        if (g_RmlOptions.IsReady()) {
+        if (!g_UiRenderer.BeginFrame(device, backbuffer, backbuf_idx)) {
+            static bool s_loggedBeginFail = false;
+            if (!s_loggedBeginFail) {
+                s_loggedBeginFail = true;
+                LogMsg("[UI] ERROR: UiRenderer::BeginFrame failed (rtv/pso init failed)!");
+            }
+            return;
+        }
+        if (render_options_sub) {
+            g_OptionsSubScreen.Render(g_RmlOptions, g_UiRenderer, g_UiInput.ActiveDevice());
+        } else if (render_saveload) {
+            g_SaveLoadScreen.Render(g_RmlOptions, g_UiRenderer, g_UiInput.ActiveDevice());
+        } else if (render_memcheck) {
+            g_MemCheckScreen.Render(g_UiRenderer, g_UiFonts);
+        } else if (render_wakelogo) {
+            g_WakeLogoScreen.Render(g_UiRenderer, g_UiFonts, g_SharedBackdropTimeSec);
+            // Quietly preload 1 Title texture per frame during Namco logo so WakeLogo -> Title has zero stutter!
+            if (g_WakeLogoScreen.ElapsedSec() >= 0.85f) {
+                g_TitleScreen.PreloadOneAsset(g_UiRenderer);
+            }
+        } else if (render_title) {
+            g_TitleScreen.Render(g_UiRenderer, g_UiFonts, g_SharedBackdropTimeSec);
+        } else if (g_RmlOptions.IsReady()) {
             g_RmlOptions.Render(g_OptionsScreen, g_UiInput.ActiveDevice(), render_main_menu);
         } else {
             g_UiFonts.SyncGpuAtlas(g_UiRenderer);
@@ -4671,6 +5007,11 @@ static void RenderCustomUiOnD3D12SEH(uint8_t* d3d_ctx, bool render_main_menu) {
         }
         g_UiRenderer.EndFrame(clist);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        static bool s_loggedSeh = false;
+        if (!s_loggedSeh) {
+            s_loggedSeh = true;
+            LogMsg("[UI] ERROR: SEH exception caught in RenderCustomUiOnD3D12SEH!");
+        }
     }
 }
 
@@ -4679,18 +5020,34 @@ static void __fastcall Hook_EndFrameAndPresentUi() {
         std::lock_guard<std::mutex> lock(g_UiMutex);
         ++g_UiFrameCounter;
         TickCustomUiOnMainThread();
+        const bool in_options_sub = (g_OptionsSubLastSeenFrame > 0) && ((g_UiFrameCounter - g_OptionsSubLastSeenFrame) <= 2u);
+        const bool render_options_sub = in_options_sub && g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady() && g_OptionsSubScreen.IsActive();
+        const bool in_saveload = (g_SaveLoadLastSeenFrame > 0) && ((g_UiFrameCounter - g_SaveLoadLastSeenFrame) <= 2u);
+        const bool render_saveload = !render_options_sub && in_saveload && g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady() && g_SaveLoadScreen.IsActive();
+        const bool in_memcheck = (g_MemCheckLastSeenFrame > 0) && ((g_UiFrameCounter - g_MemCheckLastSeenFrame) <= 2u);
+        const bool render_memcheck = !render_options_sub && !render_saveload && in_memcheck && g_EnableCustomUI && g_UseCustomMainMenu;
+        const bool in_title = (g_TitleLastSeenFrame > 0) && ((g_UiFrameCounter - g_TitleLastSeenFrame) <= 2u);
+        const bool render_title = !render_options_sub && !render_saveload && !render_memcheck && in_title && g_EnableCustomUI && g_UseCustomMainMenu;
+        const bool in_wakelogo_raw = (g_WakeLogoLastSeenFrame > 0) && ((g_UiFrameCounter - g_WakeLogoLastSeenFrame) <= 2u);
+        const bool bridging_to_title = !in_title && g_TitleEnteredFromWakeLogo && g_WakeLogoScreen.IsActive()
+            && (g_WakeLogoLastSeenFrame > 0) && ((g_UiFrameCounter - g_WakeLogoLastSeenFrame) <= 30u)
+            && g_WakeLogoShouldFinish.load(std::memory_order_acquire);
+        const bool render_wakelogo = !render_options_sub && !render_saveload && !render_memcheck && !render_title && (in_wakelogo_raw || bridging_to_title) && g_EnableCustomUI && g_UseCustomMainMenu;
+        const bool in_native_submenu = (g_NativeSubMenuLastSeenFrame > 0) && ((g_UiFrameCounter - g_NativeSubMenuLastSeenFrame) <= 2u);
         const bool in_main_select = (g_MainSelectLastSeenFrame > 0) && ((g_UiFrameCounter - g_MainSelectLastSeenFrame) <= 2u);
-        const bool render_main = in_main_select && g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady();
-        if (render_main || g_OptionsScreen.IsOpen()) {
+        const bool render_main = !render_options_sub && !render_saveload && !render_memcheck && !render_wakelogo && !render_title && in_main_select && !in_native_submenu && g_EnableCustomUI && g_UseCustomMainMenu && g_RmlOptions.IsReady();
+        if (render_options_sub || render_saveload || render_memcheck || render_wakelogo || render_title || render_main || g_OptionsScreen.IsOpen()) {
             uint8_t* d3d_ctx = *reinterpret_cast<uint8_t* const*>(g_ExeBase + AczRva(RVA_GlobalD3D12Context_Ui));
             if (d3d_ctx != nullptr) {
-                RenderCustomUiOnD3D12SEH(d3d_ctx, render_main);
+                RenderCustomUiOnD3D12SEH(d3d_ctx, render_main, render_title, render_wakelogo, render_memcheck, render_saveload, render_options_sub);
             }
         }
     }
     if (g_OrigEndFrameAndPresentUi != nullptr) {
         g_OrigEndFrameAndPresentUi();
     }
+    // Apply pending live Display Mode / Resolution / SwapChain changes strictly AFTER Present (command list closed!)
+    acz_display::OnAfterPresent();
     // Apply deferred native ScreenAspect change strictly AFTER Present (when D3D12 command list is closed!)
     int pending_aspect = g_UiPendingNativeAspect.exchange(-1, std::memory_order_acq_rel);
     if (pending_aspect >= 0 && pending_aspect <= 2 && g_OrigSwgOptionSetAspect != nullptr) {
@@ -4741,6 +5098,46 @@ static void InitializeCustomUiEngine() {
     bridge.setEnableLogging       = [](int v) { g_EnableLogging = (v != 0); };
     bridge.saveEnhancerIni        = []() { SaveAllEnhancerSettingsToIni(); };
 
+    // Live Display & Continuous Aspect Engine bridge
+    bridge.getActiveDisplayMode = []() { return acz_display::g_ActiveBorderless ? 1 : 0; };
+    bridge.getWindowedResIndex  = []() { return acz_display::FindResolutionIndex(acz_display::g_WindowedW, acz_display::g_WindowedH); };
+    bridge.getResolutionChoices = []() {
+        acz_display::RefreshResolutionList();
+        std::vector<std::string> out;
+        out.reserve(acz_display::g_Resolutions.size());
+        for (const auto& r : acz_display::g_Resolutions) out.push_back(r.label);
+        return out;
+    };
+    bridge.getNativeMonitorResLabel = []() {
+        acz_display::RefreshMonitorNativeSize();
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%ux%u (NATIVE)", acz_display::g_MonitorNativeW, acz_display::g_MonitorNativeH);
+        return std::string(buf);
+    };
+    bridge.getAspectOverride = []() { return acz_display::GetAspectOverrideMode(); };
+    bridge.setAspectOverride = [](int mode) {
+        acz_display::SetAspectOverrideMode(mode);
+        SaveAllEnhancerSettingsToIni();
+    };
+    bridge.getUiWidescreenOverride = []() { return g_UiWidescreenOverride; };
+    bridge.setUiWidescreenOverride = [](int mode) {
+        g_UiWidescreenOverride = std::clamp(mode, 0, 2);
+        g_RmlOptions.SetUiWidescreenOverride(g_UiWidescreenOverride);
+        SaveAllEnhancerSettingsToIni();
+    };
+    bridge.applyDisplayChanges = [](int mode, int resIdx) {
+        const bool borderless = (mode != 0);
+        uint32_t w = acz_display::g_WindowedW;
+        uint32_t h = acz_display::g_WindowedH;
+        if (!borderless && resIdx >= 0 && resIdx < static_cast<int>(acz_display::g_Resolutions.size())) {
+            w = acz_display::g_Resolutions[resIdx].width;
+            h = acz_display::g_Resolutions[resIdx].height;
+        }
+        acz_display::RequestLiveDisplayChange(borderless, w, h, true, false);
+    };
+    bridge.confirmDisplayChanges = []() { acz_display::ConfirmDisplayChangeAndSave(); };
+    bridge.revertDisplayChanges  = []() { acz_display::RevertDisplayChange(); };
+
     bridge.isHdTexLoaded = []() {
         return GetModuleHandleA("acz_hdtex.asi") != nullptr || GetModuleHandleA("acz_hdtex.dll") != nullptr;
     };
@@ -4758,6 +5155,19 @@ static void InitializeCustomUiEngine() {
     };
 
     g_OptionsScreen.Initialize(bridge);
+    g_WakeLogoScreen.SetAssetsRoot(g_GameDir);
+    g_TitleScreen.SetAssetsRoot(g_GameDir);
+    if (g_OrigCModeWakeLogoUpdate == nullptr) {
+        InstallDetour64(
+            "CModeWakeLogo::Update_UI",
+            g_ExeBase + AczRva(RVA_CModeWakeLogoUpdate),
+            PROLOGUE_CModeWakeLogoUpdate,
+            sizeof(PROLOGUE_CModeWakeLogoUpdate),
+            reinterpret_cast<const void*>(&Hook_CModeWakeLogoUpdate),
+            reinterpret_cast<void**>(&g_OrigCModeWakeLogoUpdate)
+        );
+    }
+    g_RmlOptions.SetUiWidescreenOverride(g_UiWidescreenOverride);
     g_RmlOptions.Initialize(&g_UiRenderer, g_GameDir, g_ExeBase, [](uintptr_t r) { return AczRva(r); }, &LogMsg);
 
     const uintptr_t present_addr = g_ExeBase + AczRva(RVA_EndFrameAndPresent_Ui);
@@ -4773,6 +5183,31 @@ static void InitializeCustomUiEngine() {
     } else {
         LogMsg("[UI] WARNING: Failed to hook EndFrameAndPresent (+0x20C280) for Custom UI.");
     }
+}
+
+static void InstallDisplayEngine() {
+    if (g_ExeBase == 0) return;
+    acz_display::HostContext disp_ctx{};
+    disp_ctx.exe_base = g_ExeBase;
+    disp_ctx.game_dir = g_GameDir;
+    disp_ctx.acz_rva = &AczRva;
+    disp_ctx.log_msg = &LogMsg;
+    disp_ctx.install_hook = &InstallDetour64;
+    disp_ctx.on_invalidate_ui_rtv = []() {
+        g_UiRenderer.InvalidateBackbuffers();
+    };
+    disp_ctx.on_aspect_changed = []() {
+        const int tier = acz_display::GetAspectTier012();
+        g_ScreenAspect = tier;
+        if (g_ExeBase != 0) {
+            __try {
+                *reinterpret_cast<int32_t*>(g_ExeBase + AczRva(RVA_ScreenSizeOption)) = tier;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        UpdateDynamicPillarboxAndAspect(g_WidescreenScissorState.load(std::memory_order_relaxed) == 1);
+    };
+    disp_ctx.on_save_enhancer_ini = &SaveAllEnhancerSettingsToIni;
+    acz_display::Install(disp_ctx);
 }
 
 static void ApplyEnhancerPatchesAndHooks() {
@@ -4848,6 +5283,10 @@ static void ApplyEnhancerPatchesAndHooks() {
         }
     }
 
+    // 2b. Install Live Display Mode, Arbitrary Resolution & Offscreen GS RT Rebuild Engine
+    //     (must install before WinMain runs LoadSettingIni so custom resolutions like 1920x822 are accepted!)
+    InstallDisplayEngine();
+
     // 3. Apply Fast Startup patches & hooks (if FastStartup > 0)
     if (g_FastStartup > 0) {
         ApplyFastStartupPatches();
@@ -4906,7 +5345,12 @@ extern "C" __declspec(dllexport) void __fastcall AczEnhancer_WriteStateSummary(c
     fprintf(rf, "  FastStartup:             %s\n", fast_str);
     fprintf(rf, "  EnableMenuOverrides:     %s (MenuAspectMode: %d)\n",
             g_EnableMenuOverrides ? "ENABLED" : "DISABLED", g_MenuAspectMode);
-    fprintf(rf, "  Active Screen Aspect:    %s (option=%d)\n", aspect_str, aspect_opt);
+    fprintf(rf, "  Active Screen Aspect:    %s (option=%d, Effective=%.4f, Override=%d)\n",
+            aspect_str, aspect_opt, acz_display::GetEffectiveAspectRatio(), acz_display::GetAspectOverrideMode());
+    fprintf(rf, "  Live Display Engine:     Mode=%s, Output=%ux%u, InternalGS=%ux%u\n",
+            acz_display::g_ActiveBorderless ? "Borderless" : "Windowed",
+            acz_display::g_ActiveOutW, acz_display::g_ActiveOutH,
+            acz_display::g_ActiveGsW, acz_display::g_ActiveGsH);
     fprintf(rf, "  Unlock2PlayerCampaign:   %s\n",
             g_Unlock2PlayerCampaign ? "ENABLED (2P Split: Pad=P1, KB=P2)" : "DISABLED (Single-Player Merged Pad+KB=P1)");
     {

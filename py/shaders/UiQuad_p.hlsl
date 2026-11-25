@@ -34,6 +34,83 @@ float ValueNoise(float2 p) {
     return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
+float2 Hash22(float2 p) {
+    float3 p3 = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
+    p3 += dot(p3, p3.yzx + 33.33f);
+    return frac((p3.xx + p3.yz) * p3.zy) * 2.0f - 1.0f;
+}
+
+// Smooth 2D Perlin Gradient Noise (zero blocky ValueNoise grid artifacts!)
+float GradNoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
+
+    float2 g00 = normalize(Hash22(i + float2(0.0f, 0.0f)) + 1e-4f);
+    float2 g10 = normalize(Hash22(i + float2(1.0f, 0.0f)) + 1e-4f);
+    float2 g01 = normalize(Hash22(i + float2(0.0f, 1.0f)) + 1e-4f);
+    float2 g11 = normalize(Hash22(i + float2(1.0f, 1.0f)) + 1e-4f);
+
+    float n00 = dot(g00, f - float2(0.0f, 0.0f));
+    float n10 = dot(g10, f - float2(1.0f, 0.0f));
+    float n01 = dot(g01, f - float2(0.0f, 1.0f));
+    float n11 = dot(g11, f - float2(1.0f, 1.0f));
+
+    return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y) * 0.5f + 0.5f;
+}
+
+float Fbm3(float2 p) {
+    float v = 0.0f;
+    float amp = 0.5f;
+    float2x2 rot = float2x2(0.80f, 0.60f, -0.60f, 0.80f);
+    [unroll]
+    for (int i = 0; i < 3; ++i) {
+        v += amp * GradNoise(p);
+        p = mul(rot, p) * 2.06f + float2(17.3f, 9.2f);
+        amp *= 0.5f;
+    }
+    return v;
+}
+
+float Fbm4(float2 p) {
+    float v = 0.0f;
+    float amp = 0.5f;
+    float2x2 rot = float2x2(0.80f, 0.60f, -0.60f, 0.80f);
+    [unroll]
+    for (int i = 0; i < 4; ++i) {
+        v += amp * GradNoise(p);
+        p = mul(rot, p) * 2.06f + float2(17.3f, 9.2f);
+        amp *= 0.5f;
+    }
+    return v;
+}
+
+float Fbm5(float2 p) {
+    float v = 0.0f;
+    float amp = 0.5f;
+    float2x2 rot = float2x2(0.80f, 0.60f, -0.60f, 0.80f);
+    [unroll]
+    for (int i = 0; i < 5; ++i) {
+        v += amp * GradNoise(p);
+        p = mul(rot, p) * 2.04f + float2(13.7f, 21.1f);
+        amp *= 0.5f;
+    }
+    return v;
+}
+
+float Fbm6(float2 p) {
+    float v = 0.0f;
+    float amp = 0.5f;
+    float2x2 rot = float2x2(0.80f, 0.60f, -0.60f, 0.80f);
+    [unroll]
+    for (int i = 0; i < 6; ++i) {
+        v += amp * GradNoise(p);
+        p = mul(rot, p) * 2.04f + float2(13.7f, 21.4f);
+        amp *= 0.5f;
+    }
+    return v;
+}
+
 float3 BlackbodyEmber(float t) {
     t = saturate(t);
     float3 c0 = float3(0.32f, 0.015f, 0.00f);
@@ -106,6 +183,149 @@ float4 main(PSInput input) : SV_TARGET {
         //   - Fire & bloom add pure light on top (outAlpha stays 0 outside crust -> pure additive bloom!)
         float3 finalRgb = ashRgb + (fireRgb + haloRgb) * alpha;
         return float4(finalRgb, outAlpha);
+    }
+
+    if (input.mode == 3u) {
+        // 3 separate soft-blurred procedural ACZ tactical grids (uv in virtual 1080p coordinates)
+        float2 p = input.uv;
+
+        // Layer 1: Major square grid (step 120 virtual px, soft Gaussian-blurred line)
+        float2 m1 = abs(frac(p / 120.0f + 0.5f) - 0.5f) * 120.0f;
+        float  gMajor = max(exp(-(m1.x * m1.x) / 9.2f), exp(-(m1.y * m1.y) / 9.2f)) * input.color.r;
+
+        // Layer 2: Minor 6x6 square sub-grid (step 20 virtual px, soft Gaussian-blurred line)
+        float2 m2 = abs(frac(p / 20.0f + 0.5f) - 0.5f) * 20.0f;
+        float  gMinor = max(exp(-(m2.x * m2.x) / 4.3f), exp(-(m2.y * m2.y) / 4.3f)) * input.color.g;
+
+        // Layer 3: Soft blurred 45-degree '/' diagonal hatch (step 7 virtual px, smooth wave)
+        float  diagWave = 0.5f + 0.5f * cos((p.x + p.y) * (6.2831853f / 7.0f));
+        float  gDiag = pow(diagWave, 2.2f) * input.color.b;
+
+        // Combine softly into dark crimson-black tactical screen lines
+        float a = saturate(max(gMajor, max(gMinor, gDiag)) + gDiag * 0.25f) * input.color.a;
+        return float4(0.03f, 0.002f, 0.001f, a);
+    }
+
+    if (input.mode == 4u) {
+        // Cinematic Procedural Belkan Storm Clouds (2D Perlin Gradient + Double Domain Warp)
+        // + Vanilla-style Forward-Zooming Mist Clouds (Title.swa Dict[17])
+        // input.uv      = aspect-corrected centered coords: x in [-aspect/2..aspect/2], y in [-0.5..0.5]
+        // input.color.r = elapsed time (seconds)
+        // input.color.g = cloudIntro [0..1]
+        // input.color.b = logoFlash  [0..1]
+        // input.color.a = masterFade [0..1]
+        float2 p          = input.uv;
+        float  t          = input.color.r;
+        float  cloudIntro = saturate(input.color.g);
+        float  logoFlash  = saturate(input.color.b);
+        float  masterFade = saturate(input.color.a);
+
+        // --------------------------------------------------------------------
+        // 1. Endless camera fly-through into deep, high-contrast dark crimson clouds
+        //    Double-warped 6-octave gradient FBM with wide dark voids (Op Us-1 / entry_005)
+        // --------------------------------------------------------------------
+        float redCloud = 0.0f;
+        float hotCore  = 0.0f;
+        float wSum     = 0.0f;
+
+        [unroll]
+        for (int i = 0; i < 3; ++i) {
+            float fi = (float)i;
+            float ph = frac(t * 0.036f + fi * 0.3333333f); // ~27.8s monumental seamless zoom octave
+            float zScale = exp(-ph * 1.18f);               // continuous ~3.25x forward fly-through
+            float env = sin(ph * 3.14159265f);
+            env = env * env;
+
+            // Slightly stretched horizontally for sweeping atmospheric cloud banks (optimized single-warp 5-oct)
+            float2 cp = float2(p.x * 1.90f, p.y * 2.65f) * zScale + float2(fi * 7.1f - 1.8f, fi * 4.7f + 1.2f);
+            float2 q = float2(
+                Fbm3(cp + float2(0.0f, 0.0f) + t * 0.008f),
+                Fbm3(cp + float2(5.2f, 1.3f) - t * 0.006f)
+            );
+            float n = Fbm5(cp + 1.85f * (q - 0.5f) + float2(1.7f, 9.2f) + float2(t * 0.010f, -t * 0.007f));
+
+            // Deep volumetric crimson cloud banks with dark smoky chasms between glowing ridges
+            float wisps = smoothstep(0.32f, 0.78f, n);
+            wisps = pow(wisps, 1.32f);
+            float core  = smoothstep(0.56f, 0.89f, n);
+
+            // Depth-weighted parallax: nearer phase layers feel slightly richer & more dramatic
+            float depthWeight = 0.78f + 0.44f * ph;
+            redCloud += wisps * env * depthWeight;
+            hotCore  += core  * env * depthWeight;
+            wSum     += env;
+        }
+        redCloud /= max(0.001f, wSum);
+        hotCore  /= max(0.001f, wSum);
+
+        // Deep crimson atmospheric cavity with fiery underglow rising from lower-left/center
+        float lowerDepth = saturate(1.0f - length((p - float2(-0.14f, 0.32f)) * float2(0.78f, 1.18f)));
+        float centerGlow = saturate(1.0f - length(p * float2(0.82f, 1.28f)));
+
+        float3 colVoid   = float3(0.018f, 0.0010f, 0.0025f);
+        float3 colDeep   = float3(0.300f, 0.0090f, 0.0150f);
+        float3 colMid    = float3(0.760f, 0.0320f, 0.0220f);
+        float3 colEmber  = float3(1.000f, 0.2100f, 0.0300f);
+
+        float density = saturate(redCloud * (0.74f + 0.56f * lowerDepth));
+        float3 bgCol = lerp(colVoid, colDeep, smoothstep(0.05f, 0.40f, density));
+        bgCol = lerp(bgCol, colMid, smoothstep(0.32f, 0.74f, density));
+        bgCol += colEmber * hotCore * (0.24f + 0.52f * lowerDepth);
+
+        // Warm atmospheric reflection from the logo lock-in flash
+        bgCol += float3(0.76f, 0.34f, 0.08f) * logoFlash * (0.18f + 0.46f * centerGlow) * (0.30f + 0.70f * redCloud);
+
+        // --------------------------------------------------------------------
+        // 2. Vanilla-style forward-zooming light clouds (Title.swa Dict[17])
+        //    Textured warm pale-gold smoky cloud veils gliding toward camera
+        // --------------------------------------------------------------------
+        float mistAccum  = 0.0f;
+        float mistDetail = 0.0f;
+        [unroll]
+        for (int j = 0; j < 3; ++j) {
+            float fj = (float)j;
+            float ph = frac(t * (1.0f / 6.2f) + fj * 0.3333333f);
+            float zScale = exp(-ph * 0.80f); // ~2.22x forward zoom from center
+            float env = smoothstep(0.0f, 0.34f, ph) * (1.0f - smoothstep(0.66f, 1.0f, ph));
+
+            float2 mp = float2(p.x * 2.15f, p.y * 2.75f) * zScale + float2(fj * 11.3f + 2.1f, fj * 7.7f - 3.4f);
+            float2 mw = float2(
+                Fbm3(mp * 0.85f + float2(3.1f, 1.7f)),
+                Fbm3(mp * 0.85f + float2(-2.4f, 5.2f))
+            );
+            float mn   = Fbm4(mp + (mw - 0.5f) * 1.65f);
+            float fine = Fbm3(mp * 2.85f + (mw - 0.5f) * 2.2f);
+
+            // Crisp, billowy fibrous smoke silhouette with internal cloud texture
+            float cloudMask = smoothstep(0.36f, 0.78f, mn) * (0.62f + 0.58f * smoothstep(0.28f, 0.76f, fine));
+            float ridge     = smoothstep(0.54f, 0.86f, mn * 0.72f + fine * 0.38f);
+            mistAccum  += cloudMask * env;
+            mistDetail += ridge * env;
+        }
+
+        // Original Title.swa Dict[17] warm yellowish-gold textured smoke clouds
+        float3 mistBase  = float3(0.96f, 0.76f, 0.42f);
+        float3 mistHi    = float3(1.00f, 0.90f, 0.64f);
+        bgCol += (mistBase * mistAccum * 0.225f + mistHi * mistDetail * 0.105f) * cloudIntro;
+
+        // Cinematic depth vignette pulling the viewer into the crimson storm
+        float vig = saturate(1.0f - dot(p * float2(0.58f, 0.96f), p * float2(0.58f, 0.96f)) * 0.54f);
+        bgCol *= (0.54f + 0.46f * vig);
+
+        return float4(bgCol * masterFade, 1.0f);
+    }
+
+    if (input.mode == 5u) {
+        // Even wide rounded-capsule optical bloom across the ENTIRE logo width (zero center hotspot!)
+        // input.uv in [0..1]x[0..1], centered at (0.5, 0.5)
+        float2 p = input.uv * 2.0f - 1.0f;
+        float2 q = float2(max(0.0f, abs(p.x) - 0.52f) / 0.48f, p.y);
+        float d2 = dot(q, q);
+        if (d2 >= 1.0f) discard;
+
+        float edgeFade = saturate((1.0f - sqrt(d2)) * 2.0f);
+        float glow     = exp(-d2 * 3.1f) * edgeFade;
+        return float4(input.color.rgb, glow * input.color.a);
     }
 
     float4 s = g_Tex.Sample(g_Sampler, input.uv);

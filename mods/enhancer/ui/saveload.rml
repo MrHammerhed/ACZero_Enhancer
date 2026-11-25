@@ -1,0 +1,73 @@
+<rml>
+<head>
+    <title>ACZ Save / Load</title>
+    <link type="text/rcss" href="acz_theme.rcss" />
+</head>
+<body>
+    <div id="bg-scanline"></div>
+
+    <div id="top-prompts">
+        <img class="btn-icon" id="sl-ico-ok" src="assets/icons/ps/PS5_Cross.png" /><span id="sl-lbl-ok">OK</span>
+        <span class="prompt-sep"></span>
+        <img class="btn-icon" id="sl-ico-cancel" src="assets/icons/ps/PS5_Circle.png" /><span id="sl-lbl-cancel">CANCEL</span>
+        <span class="prompt-right">[F1: VANILLA / CUSTOM]  [F5: HOT-RELOAD]</span>
+    </div>
+
+    <div id="menu-frame">
+        <div id="breadcrumb-bar">
+            <img class="folder-icon" src="assets/icons/ui/folder.png" />
+            <span id="sl-header-text">GAME DATA</span>
+            <span id="sl-mode-tag">SAVE</span>
+        </div>
+
+        <div id="sl-slots">
+            <div class="sl-slot selected" id="sl-slot-0">
+                <div class="sl-slot-bar"><span class="sl-slot-title" id="sl-title-0">FILE 01</span></div>
+                <div class="sl-slot-body">
+                    <div class="sl-row"><span class="sl-key" id="sl-km-0">[MISSION No./NAME]</span><span class="sl-val" id="sl-m-0">-- / --------</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kd-0">[DIFFICULTY LEVEL]</span><span class="sl-val" id="sl-d-0">----</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kt-0">[CAMPAIGN FLIGHT TIME]</span><span class="sl-val" id="sl-t-0">----:--:--</span></div>
+                    <div class="sl-clear-badge hidden" id="sl-c-0">CLEAR</div>
+                </div>
+            </div>
+
+            <div class="sl-slot" id="sl-slot-1">
+                <div class="sl-slot-bar"><span class="sl-slot-title" id="sl-title-1">FILE 02</span></div>
+                <div class="sl-slot-body">
+                    <div class="sl-row"><span class="sl-key" id="sl-km-1">[MISSION No./NAME]</span><span class="sl-val" id="sl-m-1">-- / --------</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kd-1">[DIFFICULTY LEVEL]</span><span class="sl-val" id="sl-d-1">----</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kt-1">[CAMPAIGN FLIGHT TIME]</span><span class="sl-val" id="sl-t-1">----:--:--</span></div>
+                    <div class="sl-clear-badge hidden" id="sl-c-1">CLEAR</div>
+                </div>
+            </div>
+
+            <div class="sl-slot last-slot" id="sl-slot-2">
+                <div class="sl-slot-bar"><span class="sl-slot-title" id="sl-title-2">FILE 03</span></div>
+                <div class="sl-slot-body">
+                    <div class="sl-row"><span class="sl-key" id="sl-km-2">[MISSION No./NAME]</span><span class="sl-val" id="sl-m-2">-- / --------</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kd-2">[DIFFICULTY LEVEL]</span><span class="sl-val" id="sl-d-2">----</span></div>
+                    <div class="sl-row"><span class="sl-key" id="sl-kt-2">[CAMPAIGN FLIGHT TIME]</span><span class="sl-val" id="sl-t-2">----:--:--</span></div>
+                    <div class="sl-clear-badge hidden" id="sl-c-2">CLEAR</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="footer-desc">Select file to save.</div>
+
+    <div id="sl-modal-overlay" class="hidden">
+        <div id="sl-modal-box">
+            <div id="sl-modal-header">
+                <div id="sl-modal-msg">Overwrite FILE 01?</div>
+            </div>
+            <div id="sl-modal-content">
+                <div id="sl-modal-sub" class="hidden"></div>
+                <div id="sl-modal-btns">
+                    <span class="sl-modal-btn" id="sl-btn-yes">YES</span>
+                    <span class="sl-modal-btn focused" id="sl-btn-no">NO</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

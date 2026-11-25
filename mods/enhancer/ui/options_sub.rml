@@ -1,0 +1,29 @@
+<rml>
+<head>
+    <title>ACZ Options Submenu</title>
+    <link type="text/rcss" href="acz_theme.rcss" />
+</head>
+<body>
+    <div id="bg-scanline"></div>
+
+    <div id="top-prompts">
+        <img class="btn-icon" id="opt-ico-ok" src="assets/icons/ps/PS5_Cross.png" /><span id="opt-lbl-ok">OK</span>
+        <span class="prompt-sep"></span>
+        <img class="btn-icon" id="opt-ico-cancel" src="assets/icons/ps/PS5_Circle.png" /><span id="opt-lbl-cancel">CANCEL</span>
+        <span class="prompt-sep" id="opt-sep-def"></span>
+        <img class="btn-icon" id="opt-ico-def" src="assets/icons/ps/PS5_Triangle.png" /><span id="opt-lbl-def">DEFAULT</span>
+        <span class="prompt-right">[F1: VANILLA / CUSTOM]  [F5: HOT-RELOAD]</span>
+    </div>
+
+    <div id="menu-frame">
+        <div id="breadcrumb-bar">
+            <img class="folder-icon" src="assets/icons/ui/folder.png" />
+            <span id="opt-crumb-text">MAIN MENU &gt; OPTIONS</span>
+        </div>
+
+        <div id="opt-body"></div>
+    </div>
+
+    <div id="footer-desc">Adjust settings.</div>
+</body>
+</rml>

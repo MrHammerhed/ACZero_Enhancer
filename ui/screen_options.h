@@ -55,6 +55,19 @@ struct OptionsHostBridge {
     std::function<void(int)>   setEnableLogging;
     std::function<void()>      saveEnhancerIni;
 
+    // Live Display Mode, Resolution & Continuous Aspect Ratio Engine
+    std::function<int()>                       getActiveDisplayMode;
+    std::function<int()>                       getWindowedResIndex;
+    std::function<std::vector<std::string>()>  getResolutionChoices;
+    std::function<std::string()>               getNativeMonitorResLabel;
+    std::function<int()>                       getAspectOverride;
+    std::function<void(int)>                   setAspectOverride;
+    std::function<int()>                       getUiWidescreenOverride;
+    std::function<void(int)>                   setUiWidescreenOverride;
+    std::function<void(int, int)>              applyDisplayChanges;
+    std::function<void()>                      confirmDisplayChanges;
+    std::function<void()>                      revertDisplayChanges;
+
     // Optional sibling plugin notifications
     std::function<bool()>      isHdTexLoaded;
     std::function<void()>      notifyHdTexReload;
@@ -74,12 +87,16 @@ namespace NativeOptionRva {
     constexpr uintptr_t kGetCommand           = 0x001F2C80;
     constexpr uintptr_t kGetHUD               = 0x001F2CF0;
     constexpr uintptr_t kGetUnit              = 0x001F2D60;
+    constexpr uintptr_t kGetScreenX           = 0x001F2DD0;
+    constexpr uintptr_t kGetScreenY           = 0x001F2E40;
     constexpr uintptr_t kGetBrightness        = 0x001F2EB0;
     constexpr uintptr_t kGetSound             = 0x001F2F90;
     constexpr uintptr_t kGetBGM               = 0x001F3000;
     constexpr uintptr_t kGetVoice             = 0x001F3070;
     constexpr uintptr_t kGetSE                = 0x001F30E0;
     constexpr uintptr_t kGetSystemSE          = 0x001F3150;
+    constexpr uintptr_t kGetLanguage          = 0x001F31C0;
+    constexpr uintptr_t kGetSubLanguage       = 0x001F3230;
 
     constexpr uintptr_t kSetControl           = 0x001F32A0;
     constexpr uintptr_t kSetButton            = 0x001F3310;
@@ -91,12 +108,25 @@ namespace NativeOptionRva {
     constexpr uintptr_t kSetCommand           = 0x001F35B0;
     constexpr uintptr_t kSetHUD               = 0x001F3620;
     constexpr uintptr_t kSetUnit              = 0x001F3690;
+    constexpr uintptr_t kSetScreenX           = 0x001F3700;
+    constexpr uintptr_t kSetScreenY           = 0x001F3770;
     constexpr uintptr_t kSetBrightness        = 0x001F37E0;
     constexpr uintptr_t kSetSound             = 0x001F38C0;
     constexpr uintptr_t kSetBGM               = 0x001F3900;
     constexpr uintptr_t kSetVoice             = 0x001F3970;
     constexpr uintptr_t kSetSE                = 0x001F39E0;
     constexpr uintptr_t kSetSystemSE          = 0x001F3A50;
+    constexpr uintptr_t kSetLanguage          = 0x001F3AC0;
+    constexpr uintptr_t kSetSubLanguage       = 0x001F3B30;
+
+    constexpr uintptr_t kDefScreenX           = 0x001F3F90;
+    constexpr uintptr_t kDefScreenY           = 0x001F4000;
+    constexpr uintptr_t kDefBrightness        = 0x001F4070;
+    constexpr uintptr_t kDefSound             = 0x001F4150;
+    constexpr uintptr_t kDefBGM               = 0x001F41C0;
+    constexpr uintptr_t kDefVoice             = 0x001F4230;
+    constexpr uintptr_t kDefSE                = 0x001F42A0;
+    constexpr uintptr_t kDefSystemSE          = 0x001F4310;
 } // namespace NativeOptionRva
 
 // SEH-isolated wrappers for calling acz.exe SWG option callbacks safely
@@ -159,6 +189,7 @@ public:
 
     bool IsOpen() const { return m_Open; }
     bool OpenedFromSwgSubmenu() const { return m_OpenedFromSwgSubmenu; }
+    const OptionsHostBridge& GetBridge() const { return m_Bridge; }
     std::vector<OptionTab>& GetTabs() { return m_Tabs; }
     int GetActiveTab() const { return m_ActiveTab; }
     void SetActiveTab(int t) {
@@ -591,6 +622,14 @@ private:
             OptionTab t;
             t.title = "ENHANCER";
             t.items.push_back(OptionItem::MakeHeader("RENDERING & VISIBILITY"));
+            t.items.push_back(OptionItem::MakeChoice(
+                "Widescreen Override",
+                "Limits menu frame width on ultrawide monitors (AUTO, FORCE 4:3, or FORCE 16:9).",
+                ApplyScope::Instant,
+                { "AUTO", "FORCE 4:3", "FORCE 16:9" },
+                [this]() { return m_Bridge.getUiWidescreenOverride ? m_Bridge.getUiWidescreenOverride() : 0; },
+                [this](int v) { if (m_Bridge.setUiWidescreenOverride) m_Bridge.setUiWidescreenOverride(v); }
+            ));
             t.items.push_back(OptionItem::MakeToggle(
                 "Extended Draw Distance (2x)",
                 "Expands coarse terrain grid to 19x19 with procedural OOB fractal terrain and 524km cloud shadows.",
